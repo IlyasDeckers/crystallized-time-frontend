@@ -83,6 +83,41 @@ streaks; slow movement produces small drifts. This is the most
 viscerally "physical" smear option and aligns with the gravity-warp
 metaphor already in the grid.
 
+**Anchored home, explorable void.** Photo 0 is written into world state
+at its native coordinates (cells `0..W, 0..H`) at startup. The viewport
+starts at the origin so the user sees photo 0 immediately. Panning with
+WASD moves the viewport over the world; cells outside photo 0's
+footprint contain nothing and render as the dark canvas background.
+
+MIDI hits paint regions at random cells *within the current viewport*,
+regardless of where the viewport is. So panning out into the void and
+firing MIDI events deposits fragments of subsequent photos — photo 1,
+then 2, then 3 — in places the user has chosen by where they panned.
+Photo 0 is the *home*; everywhere else is built by the interaction of
+the user's exploration and the substrate's events.
+
+This makes WASD navigation an act of composition rather than just
+scrolling. Where you pan determines where future photos can be
+discovered. Photo 0 remains anchored at the origin as a stable
+reference; the rest of the visible image at any moment is a record of
+where MIDI activity and exploration have coincided.
+
+**Channel 16 inverts the viewport.** Independent of the photo
+mechanics: any incoming MIDI note-on on channel 16 toggles a global
+invert flag. When the flag is on, every painted cell value is rendered
+inverted (grayscale `v` becomes `255 - v`; colors become their
+complement). This is a viewport-level rendering effect, not a
+modification of stored cell values — toggling it twice returns the
+exact original state.
+
+Channel 16 is the substrate's clock channel in the Rust app's default
+config. Tying the inversion to it means the visual world *flips* in
+time with the chain's master clock — a rhythmic, hard-edged
+counterpoint to the slow pixel-by-pixel evolution of the photo
+mechanics. The clock dying in the thermal phase (per the spec in the
+Rust repo) means the inversion stops happening; the chain leaving the
+crystal phase becomes visually legible.
+
 ---
 
 ## Data model
@@ -152,17 +187,28 @@ both pass through the same map.
 
 ## Behavior
 
-### Photo cycling
+### Photo cycling and startup
 
-A single integer `nextPhotoIndex`, initialized to 0. On each MIDI hit:
+At startup, photo 0 is written into world state at its native
+coordinates (cells `0..W, 0..H`). The viewport opens at (0, 0). This is
+the *anchor*: photo 0 occupies a specific, stable region of the
+infinite plane.
+
+A single integer `nextPhotoIndex` is initialized to 1 (not 0 — photo 0
+has already been "placed" by the anchor). On each MIDI hit:
 
 1. Choose source = `photos[nextPhotoIndex]`.
 2. Increment: `nextPhotoIndex = (nextPhotoIndex + 1) % photos.length`.
 
-The grid's initial state at startup is the first photo, painted in full.
-Subsequent hits start pulling from photo 1, then 2, and so on. After the
-last photo, the cycle wraps. This matches the "evolving through stages"
-metaphor — wrapping means the cycle is continuous rather than terminating.
+So the first MIDI hit reads from photo 1, the second from photo 2, and
+so on. After the last photo, the cycle wraps back to photo 1 — photo 0
+is *only* used to anchor; it does not re-enter the cycle. If
+`wrapPhotos: false`, the cycle stops at the last photo and all
+subsequent hits keep pulling from that one.
+
+Cells written by MIDI hits or by mouse smearing overwrite whatever was
+there — including parts of photo 0 inside its anchor footprint. The
+anchor is a *starting condition*, not an invariant.
 
 ### Region size from pitch
 
@@ -179,11 +225,21 @@ produce smaller. The region is a square centered on the hit cell — the
 exact same cell-selection mechanism the existing flash effect uses.
 
 The region's *position* in the grid is a random cell in the current
-viewport — same as the current MIDI handler. The region's *contents*
-come from the same coordinates in the source photo (image space = grid
-space). If the region's grid coordinates fall outside the photo's
-bounds, the out-of-bounds cells contribute no update (we don't extend
-photos by tiling or by repeating edges).
+viewport — the viewport's current pan offset is the only thing that
+determines where the region lands. The region's *contents* come from
+the corresponding coordinates in the source photo. Because only photo 0
+shares its native coordinates with the grid (cells `0..W`), photos 1+
+are sampled at *the region's grid coordinates modulo the source photo's
+dimensions* — i.e. each subsequent photo is conceptually tiled, and the
+hit reads from `(gridX mod photoW, gridY mod photoH)`. Photo 0 is *not*
+tiled; its contents only appear in its native footprint, set once at
+startup and modified locally by later writes.
+
+This means panning to (500, 500) and firing a MIDI hit reads from
+photo 1 at coordinates `(500 mod W, 500 mod H)` — which is some
+recognizable fragment of photo 1, just not the part you'd see at
+(500, 500) if photo 1 were displayed in full. Across many hits in
+varied viewport positions, all parts of all photos become reachable.
 
 ### Region reveal
 
@@ -228,13 +284,33 @@ copying cells onto themselves.
 For the Color value type, smearing blends the RGB channels independently.
 For Grayscale and Tinted, it blends the single value.
 
+### Channel 16 invert
+
+Any incoming MIDI note-on on channel 16 toggles a boolean
+`invertedRef.current`. The toggle is debounced: only the rising edge of
+a note-on event triggers a toggle, with a minimum interval of 50 ms
+between toggles to ignore the spuriously-rapid duplicate hits some
+controllers emit.
+
+The invert flag does *not* modify world state. It's read by the
+renderer each frame and applied at paint time. Cell value 200 renders
+as `rgb(200, 200, 200)` when not inverted, `rgb(55, 55, 55)` when
+inverted. For Color values, each channel is complemented independently:
+`(r, g, b)` becomes `(255-r, 255-g, 255-b)`. For Tinted, the lightness
+is inverted while the hue stays the same.
+
+Channel 16's note number is ignored — any note-on on the channel
+toggles. This means the substrate's clock pulses fire the toggle on
+every magnetization zero-crossing.
+
 ### Rendering
 
 The grid's `renderCell` callback reads from `worldState.get(cellKey(x, y))`:
 
-- If present: paint the cell with the value according to its type.
-- If absent: leave the cell empty (transparent — the dark background shows
-  through, matching the existing canvas behavior).
+- If present: paint the cell with the value according to its type,
+  applying the current invert flag.
+- If absent: leave the cell empty (transparent — the dark background
+  shows through, matching the existing canvas behavior).
 
 Cell values are looked up per-frame per-visible-cell. With ~600 visible
 cells at typical zoom, that's 600 Map lookups per frame, well below any
@@ -269,6 +345,10 @@ interface EvolvingPhotosConfig {
 
   // Photo cycling
   wrapPhotos: boolean            // default true; if false, cycle stops at last
+
+  // Invert
+  invertChannel: number          // 0..15, channel that toggles invert. Default 15 (channel 16).
+  invertDebounceMs: number       // minimum ms between toggles, default 50
 }
 ```
 
@@ -315,23 +395,33 @@ App composes these.
 ## Definition of done
 
 1. With 10 photo URLs configured and value type `Grayscale`, the app
-   displays the first photo at startup (within a second of load), with
-   the photo's pixel (0, 0) at grid cell (0, 0).
-2. Incoming MIDI note-ons trigger region swaps. Low pitches produce
-   large regions; high pitches produce small ones. Regions are drawn from
-   `photos[0]` first, then `photos[1]`, then `[2]`, wrapping at the end.
-3. Each swap reveals its region pixel-by-pixel over approximately one
+   displays photo 0 at startup (within a second of load), with the
+   photo's pixel (0, 0) at grid cell (0, 0). The viewport opens at the
+   origin.
+2. Panning with WASD into territory outside photo 0's footprint shows
+   the dark canvas background. Photo 0 is not extended or tiled; it
+   appears only in its native footprint.
+3. Incoming MIDI note-ons trigger region swaps at random viewport
+   positions. Low pitches produce large regions; high pitches produce
+   small ones. Regions are drawn from `photos[1]` first, then `[2]`,
+   etc., wrapping back to `photos[1]` after the last photo.
+4. Each swap reveals its region pixel-by-pixel over approximately one
    second. Multiple swaps can overlap in time and space without visual
    glitches; later writes win on contested cells.
-4. Mouse movement at typical speeds (~500 px/s) leaves a visible smear
+5. Mouse movement at typical speeds (~500 px/s) leaves a visible smear
    trail in the cell values it passes over. Stationary cursor produces
    no change. Very fast sweeps blur larger regions.
-5. Switching the config's `valueType` to `Tinted` or `Color` and
+6. Note-on events on the configured invert channel (default channel 16)
+   toggle a viewport-level invert. Toggling twice returns the visible
+   image to its original colors exactly. Spurious rapid duplicate hits
+   within the debounce window are ignored.
+7. Switching the config's `valueType` to `Tinted` or `Color` and
    reloading produces the corresponding rendering with no other code
-   changes (the value type is honored end-to-end).
-6. With the debug HUD enabled, the current photo index, total photos
-   loaded, and pending update count are visible.
-7. The canvas grid, MIDI hook, and draggable card components are
+   changes (the value type is honored end-to-end). Invert works for
+   all three value types.
+8. With the debug HUD enabled, the current photo index, total photos
+   loaded, pending update count, and invert state are visible.
+9. The canvas grid, MIDI hook, and draggable card components are
    unchanged.
 
 ---
