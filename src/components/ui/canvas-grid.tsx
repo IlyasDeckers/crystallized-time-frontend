@@ -52,7 +52,7 @@ export const CanvasGrid = forwardRef<CanvasGridHandle, CanvasGridProps>(
       cellSize = 40,
       className,
       renderCell,
-      gridColor = "rgba(156, 163, 175, 0.3)",
+      gridColor = "rgba(255, 255, 255, 0.00)",
       backgroundColor = null,
       onCellHover,
       onCellClick,
@@ -195,9 +195,9 @@ export const CanvasGrid = forwardRef<CanvasGridHandle, CanvasGridProps>(
               const screenY = row * cellSize - subY - cellSize
               ctx.save()
               ctx.translate(screenX, screenY)
-              ctx.beginPath()
-              ctx.rect(0, 0, cellSize, cellSize)
-              ctx.clip()
+              // ctx.beginPath()
+              // ctx.rect(0, 0, cellSize, cellSize)
+              // ctx.clip()
               renderer({
                 ctx,
                 cell: { x: gridX, y: gridY },
