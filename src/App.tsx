@@ -1,27 +1,43 @@
-import {useEffect, useRef, useState} from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
-import {Navbar} from '@/components/layout/navbar'
+import { Navbar } from '@/components/layout/navbar'
+import { DraggableCard } from '@/components/ui/draggable-card'
 import {
-  InteractiveGridPattern,
-  cellKey,
+  CanvasGrid,
+  type CanvasGridHandle,
   type CellCoord,
-} from '@/components/ui/interactive-grid-pattern'
+  type CellRenderer,
+} from '@/components/ui/canvas-grid'
 
-// A little marker at the origin so you can see scroll working
-const MARKERS: Record<string, string> = {
-  [cellKey(0, 0)]: 'var(--primary)',
-  [cellKey(1, 0)]: 'var(--primary)',
-  [cellKey(0, 1)]: 'var(--primary)',
-  [cellKey(5, 3)]: 'var(--destructive)',
-  [cellKey(-3, -2)]: 'var(--destructive)',
-}
+const SCROLL_SPEED = 8
 
-const SCROLL_SPEED = 8 // cells per second
+const STATIC_CELLS = new Map<string, string>([
+  ['0,0', '#e5e5e5'],
+  ['5,3', '#fb6415'],
+  ['-3,-2', '#fb6415'],
+])
+
+const cellKeyOf = (x: number, y: number) => `${x},${y}`
 
 function App() {
-  const [offset, setOffset] = useState({x: 0, y: 0})
-  const [hovered, setHovered] = useState<CellCoord | null>(null)
+  const gridRef = useRef<CanvasGridHandle>(null)
+  const offsetRef = useRef({ x: 0, y: 0 })
   const keys = useRef<Set<string>>(new Set())
+  const [hovered, setHovered] = useState<CellCoord | null>(null)
+  const [displayOffset, setDisplayOffset] = useState({ x: 0, y: 0 })
+  const [debugOpen, setDebugOpen] = useState(true)
+
+  const renderCell = useCallback<CellRenderer>(({ ctx, cell, size, hovered }) => {
+    const staticFill = STATIC_CELLS.get(cellKeyOf(cell.x, cell.y))
+    if (staticFill) {
+      ctx.fillStyle = staticFill
+      ctx.fillRect(0, 0, size, size)
+    }
+    if (hovered) {
+      ctx.fillStyle = 'rgba(229, 229, 229, 0.15)'
+      ctx.fillRect(0, 0, size, size)
+    }
+  }, [])
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => keys.current.add(e.key.toLowerCase())
@@ -37,21 +53,25 @@ function App() {
   useEffect(() => {
     let raf = 0
     let last = performance.now()
+    let displayTimer = 0
     const tick = (now: number) => {
       const dt = (now - last) / 1000
       last = now
       const k = keys.current
-      let dx = 0
-      let dy = 0
+      let dx = 0, dy = 0
       if (k.has('arrowleft') || k.has('a')) dx -= 1
       if (k.has('arrowright') || k.has('d')) dx += 1
       if (k.has('arrowup') || k.has('w')) dy -= 1
       if (k.has('arrowdown') || k.has('s')) dy += 1
       if (dx || dy) {
-        setOffset((o) => ({
-          x: o.x + dx * SCROLL_SPEED * dt,
-          y: o.y + dy * SCROLL_SPEED * dt,
-        }))
+        offsetRef.current.x += dx * SCROLL_SPEED * dt
+        offsetRef.current.y += dy * SCROLL_SPEED * dt
+        gridRef.current?.setOffset(offsetRef.current.x, offsetRef.current.y)
+      }
+      displayTimer += dt
+      if (displayTimer > 0.1) {
+        displayTimer = 0
+        setDisplayOffset({ ...offsetRef.current })
       }
       raf = requestAnimationFrame(tick)
     }
@@ -60,25 +80,40 @@ function App() {
   }, [])
 
   return (
-      <div className="min-h-screen flex flex-col bg-background text-foreground">
-        <Navbar/>
-        <main className="flex-1 relative overflow-hidden min-h-0">
-          <InteractiveGridPattern
-              cellSize={40}
-              cellColors={MARKERS}
-              offsetX={offset.x}
-              offsetY={offset.y}
-              onCellHover={setHovered}
-          />
-          <div className="relative flex-1 px-6 py-8 pointer-events-none">
-            <div className="pointer-events-auto inline-block bg-background/80 border border-border px-3 py-2 text-xs">
-              <div>offset: ({offset.x.toFixed(1)}, {offset.y.toFixed(1)})</div>
-              <div>hover: {hovered ? `(${hovered.x}, ${hovered.y})` : '—'}</div>
-              <div className="text-muted-foreground mt-1">wasd / arrow keys</div>
+    <div className="min-h-screen flex flex-col bg-background text-foreground">
+      <Navbar />
+      <main className="flex-1 relative overflow-hidden min-h-0">
+        <CanvasGrid
+          ref={gridRef}
+          cellSize={40}
+          renderCell={renderCell}
+          onCellHover={setHovered}
+        />
+        <DraggableCard
+          title="debug"
+          open={debugOpen}
+          onClose={() => setDebugOpen(false)}
+          defaultPosition={{ x: 24, y: 72 }}
+          defaultWidth={260}
+        >
+          <div className="space-y-1 font-mono">
+            <div className="text-muted-foreground">
+              offset: <span className="text-foreground">
+                ({displayOffset.x.toFixed(1)}, {displayOffset.y.toFixed(1)})
+              </span>
+            </div>
+            <div className="text-muted-foreground">
+              hover: <span className="text-foreground">
+                {hovered ? `(${hovered.x}, ${hovered.y})` : '—'}
+              </span>
+            </div>
+            <div className="text-muted-foreground/60 pt-1 text-[10px]">
+              wasd / arrow keys
             </div>
           </div>
-        </main>
-      </div>
+        </DraggableCard>
+      </main>
+    </div>
   )
 }
 
