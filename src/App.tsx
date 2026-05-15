@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import {useEffect, useRef, useState} from 'react'
 import './App.css'
-import { Navbar } from '@/components/layout/navbar'
+import {Navbar} from '@/components/layout/navbar'
 import {
   InteractiveGridPattern,
   cellKey,
@@ -19,7 +19,7 @@ const MARKERS: Record<string, string> = {
 const SCROLL_SPEED = 8 // cells per second
 
 function App() {
-  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [offset, setOffset] = useState({x: 0, y: 0})
   const [hovered, setHovered] = useState<CellCoord | null>(null)
   const keys = useRef<Set<string>>(new Set())
 
@@ -61,7 +61,7 @@ function App() {
 
   return (
       <div className="min-h-screen flex flex-col bg-background text-foreground">
-        <Navbar />
+        <Navbar/>
         <main className="flex-1 relative overflow-hidden min-h-0">
           <InteractiveGridPattern
               cellSize={40}
