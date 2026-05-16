@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import { Navbar } from '@/components/layout/navbar'
 import { DraggableCard } from '@/components/ui/draggable-card'
+import { OscSendCard } from '@/components/ui/osc-send-card'
 import {
   CanvasGrid,
   type CanvasGridHandle,
@@ -9,9 +10,11 @@ import {
   type CellRenderer,
 } from '@/components/ui/canvas-grid'
 import { useMidi, type MidiMessage } from '@/hooks/use-midi'
+import { useOsc } from '@/hooks/use-osc'
 
 const SCROLL_SPEED = 8
 const FLASH_DURATION = 0.5 // seconds
+const OSC_LOG_VISIBLE = 8   // how many recent OSC messages to show in the debug card
 
 interface CellFlash {
   startTime: number
@@ -30,6 +33,7 @@ function App() {
   const [hovered, setHovered] = useState<CellCoord | null>(null)
   const [displayOffset, setDisplayOffset] = useState({ x: 0, y: 0 })
   const [debugOpen, setDebugOpen] = useState(true)
+  const [sendOpen, setSendOpen] = useState(true)
 
   // Active flashes, keyed by "x,y". Stored in a ref so updates don't
   // re-render React on every MIDI message.
@@ -58,6 +62,10 @@ function App() {
   }, [])
 
   const midi = useMidi({ onMessage: handleMidiMessage })
+
+  // OSC: auto-connects to the bridge at ws://localhost:8080 by default.
+  // The osc-js Bridge process translates UDP <-> WebSocket.
+  const osc = useOsc({ url: 'ws://localhost:8080', logSize: 200 })
 
   // Auto-select the first input/output once connected
   useEffect(() => {
@@ -151,18 +159,21 @@ function App() {
   }, [])
 
   const last = lastMidiRef.current
+  // Slice the most recent N messages for display. The hook keeps a longer
+  // log internally so the slice doesn't lose anything if the card scrolls.
+  const recentOsc = osc.messages.slice(-OSC_LOG_VISIBLE).reverse()
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       <Navbar />
       <main className="flex-1 relative overflow-hidden min-h-0">
-        <CanvasGrid
-          ref={gridRef}
-          cellSize={2.5}
-          renderCell={renderCell}
-          onCellHover={setHovered}
-          onCellClick={handleCellClick}
-        />
+        {/*<CanvasGrid*/}
+        {/*  ref={gridRef}*/}
+        {/*  cellSize={2.5}*/}
+        {/*  renderCell={renderCell}*/}
+        {/*  onCellHover={setHovered}*/}
+        {/*  onCellClick={handleCellClick}*/}
+        {/*/>*/}
         <DraggableCard
           title="debug"
           open={debugOpen}
@@ -208,11 +219,62 @@ function App() {
                 {hovered ? `(${hovered.x}, ${hovered.y})` : '—'}
               </div>
             </div>
+            <div className="pt-1 border-t border-border/50">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">osc status</span>
+                <span className="text-foreground">{osc.status}</span>
+              </div>
+              {osc.error && (
+                <div className="text-destructive/80 text-[10px] truncate" title={osc.error}>
+                  {osc.error}
+                </div>
+              )}
+              {osc.status !== 'connected' && (
+                <button
+                  onClick={() => osc.connect()}
+                  className="mt-1 px-2 py-1 border border-border hover:bg-muted text-xs"
+                >
+                  reconnect osc
+                </button>
+              )}
+              <div className="text-muted-foreground mt-2">recent in</div>
+              <div className="mt-0.5 space-y-0.5 max-h-32 overflow-y-auto">
+                {recentOsc.length === 0 ? (
+                  <div className="text-muted-foreground/60 text-[10px]">—</div>
+                ) : (
+                  recentOsc.map((m) => (
+                    <div key={m.id} className="text-[10px] leading-tight truncate">
+                      <span className="text-foreground">{m.address}</span>
+                      {m.args.length > 0 && (
+                        <span className="text-muted-foreground ml-1">
+                          {m.args
+                            .map((a) =>
+                              typeof a === 'number'
+                                ? Number.isInteger(a)
+                                  ? a.toString()
+                                  : a.toFixed(3)
+                                : String(a)
+                            )
+                            .join(' ')}
+                        </span>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
             <div className="text-muted-foreground/60 text-[10px]">
               wasd / arrows · click cells to send note 60 ch1
             </div>
           </div>
         </DraggableCard>
+
+        <OscSendCard
+          open={sendOpen}
+          onClose={() => setSendOpen(false)}
+          send={osc.send}
+          enabled={osc.status === 'connected'}
+        />
       </main>
     </div>
   )

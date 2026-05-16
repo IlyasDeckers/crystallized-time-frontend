@@ -90,7 +90,7 @@ export function useMidi({ onMessage }: UseMidiOptions = {}): UseMidiResult {
       const msg = parseMessage(event.data!, event.timeStamp)
       onMessageRef.current?.(msg)
     }
-    // Clear all input handlers, then attach to the selected one
+
     for (const input of access.inputs.values()) {
       input.onmidimessage = null
     }

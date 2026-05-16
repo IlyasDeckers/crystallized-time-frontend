@@ -13,6 +13,18 @@ export interface CellCoord {
   y: number
 }
 
+/**
+ * Pointer position in both screen and grid coordinate systems. `gridX`
+ * and `gridY` are fractional — they describe where in the grid the
+ * pointer is, not which cell it's over. Use `Math.floor` for the cell.
+ */
+export interface PointerPosition {
+  clientX: number
+  clientY: number
+  gridX: number
+  gridY: number
+}
+
 export interface CellRenderContext {
   /** Canvas 2D context, already translated so (0,0) is this cell's top-left in screen space. */
   ctx: CanvasRenderingContext2D
@@ -42,9 +54,13 @@ interface CanvasGridProps {
   backgroundColor?: string | null
   onCellHover?: (cell: CellCoord | null) => void
   onCellClick?: (cell: CellCoord) => void
+  /**
+   * Fires for every pointer move (and on pointer leave with `null`).
+   * Unlike `onCellHover`, this fires continuously rather than only on
+   * cell changes, so callers can compute velocity smoothly.
+   */
+  onPointerPosition?: (info: PointerPosition | null) => void
 }
-
-export const cellKey = (x: number, y: number) => `${x},${y}`
 
 export const CanvasGrid = forwardRef<CanvasGridHandle, CanvasGridProps>(
   function CanvasGrid(
@@ -56,6 +72,7 @@ export const CanvasGrid = forwardRef<CanvasGridHandle, CanvasGridProps>(
       backgroundColor = null,
       onCellHover,
       onCellClick,
+      onPointerPosition,
     },
     ref
   ) {
@@ -72,8 +89,10 @@ export const CanvasGrid = forwardRef<CanvasGridHandle, CanvasGridProps>(
     const styleRef = useRef({ gridColor, backgroundColor })
     useEffect(() => { styleRef.current = { gridColor, backgroundColor } }, [gridColor, backgroundColor])
 
-    const callbacksRef = useRef({ onCellHover, onCellClick })
-    useEffect(() => { callbacksRef.current = { onCellHover, onCellClick } }, [onCellHover, onCellClick])
+    const callbacksRef = useRef({ onCellHover, onCellClick, onPointerPosition })
+    useEffect(() => {
+      callbacksRef.current = { onCellHover, onCellClick, onPointerPosition }
+    }, [onCellHover, onCellClick, onPointerPosition])
 
     useImperativeHandle(ref, () => ({
       setOffset: (x, y) => { offsetRef.current = { x, y } },
@@ -106,8 +125,12 @@ export const CanvasGrid = forwardRef<CanvasGridHandle, CanvasGridProps>(
       }
     }, [])
 
-    const cellFromPointer = useCallback(
-      (clientX: number, clientY: number): CellCoord | null => {
+    /**
+     * Convert a client-space pointer position into both the integer
+     * cell coord and fractional grid coords.
+     */
+    const positionFromPointer = useCallback(
+      (clientX: number, clientY: number): { cell: CellCoord; gridX: number; gridY: number } | null => {
         const canvas = canvasRef.current
         if (!canvas) return null
         const rect = canvas.getBoundingClientRect()
@@ -115,9 +138,12 @@ export const CanvasGrid = forwardRef<CanvasGridHandle, CanvasGridProps>(
         const localY = clientY - rect.top
         if (localX < 0 || localY < 0 || localX > rect.width || localY > rect.height) return null
         const offset = offsetRef.current
+        const gridX = localX / cellSize + offset.x
+        const gridY = localY / cellSize + offset.y
         return {
-          x: Math.floor(localX / cellSize + offset.x),
-          y: Math.floor(localY / cellSize + offset.y),
+          cell: { x: Math.floor(gridX), y: Math.floor(gridY) },
+          gridX,
+          gridY,
         }
       },
       [cellSize]
@@ -125,7 +151,8 @@ export const CanvasGrid = forwardRef<CanvasGridHandle, CanvasGridProps>(
 
     const handlePointerMove = useCallback(
       (e: React.PointerEvent<HTMLCanvasElement>) => {
-        const cell = cellFromPointer(e.clientX, e.clientY)
+        const pos = positionFromPointer(e.clientX, e.clientY)
+        const cell = pos?.cell ?? null
         const prev = hoverRef.current
         if (
           cell?.x !== prev?.x ||
@@ -135,8 +162,16 @@ export const CanvasGrid = forwardRef<CanvasGridHandle, CanvasGridProps>(
           hoverRef.current = cell
           callbacksRef.current.onCellHover?.(cell)
         }
+        if (pos) {
+          callbacksRef.current.onPointerPosition?.({
+            clientX: e.clientX,
+            clientY: e.clientY,
+            gridX: pos.gridX,
+            gridY: pos.gridY,
+          })
+        }
       },
-      [cellFromPointer]
+      [positionFromPointer]
     )
 
     const handlePointerLeave = useCallback(() => {
@@ -144,14 +179,15 @@ export const CanvasGrid = forwardRef<CanvasGridHandle, CanvasGridProps>(
         hoverRef.current = null
         callbacksRef.current.onCellHover?.(null)
       }
+      callbacksRef.current.onPointerPosition?.(null)
     }, [])
 
     const handleClick = useCallback(
       (e: React.PointerEvent<HTMLCanvasElement>) => {
-        const cell = cellFromPointer(e.clientX, e.clientY)
-        if (cell) callbacksRef.current.onCellClick?.(cell)
+        const pos = positionFromPointer(e.clientX, e.clientY)
+        if (pos) callbacksRef.current.onCellClick?.(pos.cell)
       },
-      [cellFromPointer]
+      [positionFromPointer]
     )
 
     useEffect(() => {
@@ -195,9 +231,6 @@ export const CanvasGrid = forwardRef<CanvasGridHandle, CanvasGridProps>(
               const screenY = row * cellSize - subY - cellSize
               ctx.save()
               ctx.translate(screenX, screenY)
-              // ctx.beginPath()
-              // ctx.rect(0, 0, cellSize, cellSize)
-              // ctx.clip()
               renderer({
                 ctx,
                 cell: { x: gridX, y: gridY },
