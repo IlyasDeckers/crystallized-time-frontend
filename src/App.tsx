@@ -27,6 +27,8 @@ import { useNodeGraph } from '@/node-graph/use-node-graph'
 import { loadGraph, saveGraph, EMPTY_GRAPH } from '@/node-graph/store'
 import type { NodeGraph } from '@/node-graph/types'
 import { NodeGraphEditor } from '@/components/ui/node-graph-editor'
+import { BottomPanel } from '@/components/ui/bottom-panel'
+import type { CardToggle } from '@/components/layout/navbar'
 
 const OSC_LOG_VISIBLE = 8
 
@@ -41,9 +43,9 @@ function countAlive(api: UseParticlesResult): number {
 }
 
 function App() {
-  const [debugOpen, setDebugOpen] = useState(true)
-  const [sendOpen, setSendOpen] = useState(true)
-  const [midiOpen, setMidiOpen] = useState(true)
+  const [debugOpen, setDebugOpen] = useState(false)
+  const [sendOpen, setSendOpen] = useState(false)
+  const [midiOpen, setMidiOpen] = useState(false)
   const [scenesOpen, setScenesOpen] = useState(false)
   const [channelStripOpen, setChannelStripOpen] = useState(false)
   const [paramDashOpen, setParamDashOpen] = useState(false)
@@ -269,9 +271,19 @@ function App() {
   const recentOsc = osc.messages.slice(-OSC_LOG_VISIBLE).reverse()
   const last = lastMidiRef.current
 
+  const cardToggles: CardToggle[] = [
+    { key: 'debug', label: 'debug', open: debugOpen, onToggle: () => setDebugOpen(v => !v) },
+    { key: 'send', label: 'osc', open: sendOpen, onToggle: () => setSendOpen(v => !v) },
+    { key: 'midi', label: 'midi', open: midiOpen, onToggle: () => setMidiOpen(v => !v) },
+    { key: 'scenes', label: 'scenes', open: scenesOpen, onToggle: () => setScenesOpen(v => !v) },
+    { key: 'channels', label: 'ch', open: channelStripOpen, onToggle: () => setChannelStripOpen(v => !v) },
+    { key: 'params', label: 'params', open: paramDashOpen, onToggle: () => setParamDashOpen(v => !v) },
+    { key: 'graph', label: 'graph', open: nodeGraphOpen, onToggle: () => setNodeGraphOpen(v => !v) },
+  ]
+
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <Navbar />
+      <Navbar cardToggles={cardToggles} />
       <main className="flex-1 relative overflow-hidden min-h-0">
 
         <PhotoLayer visible={photoVisible} canvasRef={photoCanvasRef} />
@@ -302,14 +314,6 @@ function App() {
             <div>
               <div className="flex items-center justify-between">
                 <div className="text-muted-foreground">midi status</div>
-                {!midiOpen && (
-                  <button
-                    onClick={() => setMidiOpen(true)}
-                    className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px]"
-                  >
-                    midi settings
-                  </button>
-                )}
               </div>
               <div className="text-foreground">{midi.status}</div>
               {midi.status === 'idle' && (
@@ -486,36 +490,6 @@ function App() {
               </button>
             </div>
 
-            {/* Panel launchers */}
-            <div className="pt-1 border-t border-border/50">
-              <div className="flex flex-wrap gap-1">
-                <button
-                  onClick={() => setScenesOpen((v) => !v)}
-                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px]"
-                >
-                  {scenesOpen ? 'hide scenes' : 'scenes'}
-                </button>
-                <button
-                  onClick={() => setChannelStripOpen((v) => !v)}
-                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px]"
-                >
-                  {channelStripOpen ? 'hide channels' : 'channels'}
-                </button>
-                <button
-                  onClick={() => setParamDashOpen((v) => !v)}
-                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px]"
-                >
-                  {paramDashOpen ? 'hide params' : 'params'}
-                </button>
-                <button
-                  onClick={() => setNodeGraphOpen((v) => !v)}
-                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px]"
-                >
-                  {nodeGraphOpen ? 'hide graph' : 'node graph'}
-                </button>
-              </div>
-            </div>
-
             {/* OSC */}
             <div className="pt-1 border-t border-border/50">
               <div className="flex items-center justify-between">
@@ -605,12 +579,12 @@ function App() {
         </DraggableCard>
 
         {/* Node graph editor */}
-        <DraggableCard
+        <BottomPanel
           title="node graph"
           open={nodeGraphOpen}
-          onClose={() => setNodeGraphOpen(false)}
-          defaultPosition={{ x: 200, y: 100 }}
-          defaultWidth={700}
+          onToggle={() => setNodeGraphOpen(v => !v)}
+          defaultHeight={450}
+          maxHeight={Math.max(200, Math.min(600, Math.floor(window.innerHeight * 0.6)))}
         >
           <NodeGraphEditor
             graph={nodeGraph}
@@ -619,7 +593,7 @@ function App() {
               setNodeGraph(g)
             }}
           />
-        </DraggableCard>
+        </BottomPanel>
 
         <OscSendCard
           open={sendOpen}

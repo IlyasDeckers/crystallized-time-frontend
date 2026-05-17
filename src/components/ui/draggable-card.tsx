@@ -70,7 +70,7 @@ export function DraggableCard({
     <div
       ref={cardRef}
       className={cn(
-        "fixed border border-border bg-background text-xs select-none z-40",
+        "fixed border border-border/40 bg-background/50 backdrop-blur-sm text-xs select-none z-40",
         className
       )}
       style={{ left: position.x, top: position.y, width: defaultWidth }}
@@ -79,7 +79,7 @@ export function DraggableCard({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        className="flex items-center justify-between h-7 px-2 border-b border-border cursor-move"
+        className="flex items-center justify-between h-7 px-2 border-b border-border/40 bg-background/30 backdrop-blur-sm cursor-move"
       >
         <span className="text-foreground tracking-wide">&gt; {title}</span>
         <div className="flex items-center gap-1">
