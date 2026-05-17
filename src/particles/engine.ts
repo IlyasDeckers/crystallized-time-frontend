@@ -2,14 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type { RefObject } from "react"
 import {
   createBuffer, spawnParticle, killParticle,
-  type ParticleBuffer, STRIDE, F,
+  type ParticleBuffer, type SpawnProps, STRIDE, F,
 } from "./buffer"
 import { DEFAULT_RENDER_CONFIG, type RenderConfig } from "./renderer"
 import type { Renderer } from "./renderer"
 import { WebGLRenderer } from "./renderer-webgl"
 import { Canvas2DRenderer } from "./renderer-canvas2d"
 
-export type { ParticleBuffer }
+export type { ParticleBuffer, SpawnProps }
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -61,6 +61,8 @@ export interface UseParticlesResult {
     setGroupShape: (name: string, shape: string) => void
   }
   burst: (options: BurstOptions) => void
+  spawn: (group: string, props: SpawnProps) => number
+  kill: (index: number) => void
   setRenderConfig: (patch: Partial<RenderConfig>) => void
 }
 
@@ -242,6 +244,27 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
     Object.assign(renderConfigLiveRef.current, patch)
   }, [])
 
+  const spawn = useCallback((groupName: string, props: SpawnProps): number => {
+    const group = groupsRef.current.get(groupName)
+    if (!group) return -1
+    return spawnParticle(bufRef.current, group.start, group.end, group.activeCount, {
+      ...props,
+      groupId: group.start,
+    })
+  }, [])
+
+  const kill = useCallback((index: number) => {
+    const buf = bufRef.current
+    const b = index * STRIDE
+    if (buf.data[b + F.AGE] >= buf.data[b + F.LIFETIME]) return
+    for (const [, group] of groupsRef.current) {
+      if (index >= group.start && index < group.end) {
+        killParticle(buf, index, group.activeCount)
+        return
+      }
+    }
+  }, [])
+
   const burst = useCallback((options: BurstOptions) => {
     const group = groupsRef.current.get(options.group)
     if (!group) return
@@ -276,6 +299,8 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
     addFrameHook,
     groups: { addGroup, removeGroup, setGroupShape },
     burst,
+    spawn,
+    kill,
     setRenderConfig,
   }
 }

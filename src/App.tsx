@@ -12,6 +12,8 @@ import { useParticleEffects } from '@/hooks/use-particle-effects'
 import { SHAPES, type ShapeName } from '@/hooks/particle-shapes'
 import type { UseParticlesResult } from '@/particles/engine'
 import { STRIDE, F } from '@/particles/buffer'
+import { useBackendBridge } from '@/backend/bridge'
+import { useVisualMappings } from '@/visual-mappings'
 
 const OSC_LOG_VISIBLE = 8
 
@@ -55,6 +57,12 @@ function App() {
   const osc = useOsc({ url: 'ws://localhost:8080', logSize: 200 })
 
   // -------------------------------------------------------------------------
+  // Backend bridge + visual mappings
+  // -------------------------------------------------------------------------
+  const bridge = useBackendBridge(osc)
+  useVisualMappings(particlesApi, bridge)
+
+  // -------------------------------------------------------------------------
   // Particle effects
   // -------------------------------------------------------------------------
   const effects = useParticleEffects(particlesApi, osc, shapes3d, {
@@ -73,10 +81,14 @@ function App() {
   // -------------------------------------------------------------------------
   // MIDI
   // -------------------------------------------------------------------------
+  const bridgeRef = useRef(bridge)
+  useEffect(() => { bridgeRef.current = bridge }, [bridge])
+
   const handleMidiMessage = useCallback((msg: MidiMessage) => {
     lastMidiRef.current = msg
     setMidiActivity((n) => (n + 1) % 1_000_000)
     effectsRef.current.handleMidi(msg)
+    bridgeRef.current.handleMidi(msg)
   }, [])
 
   const midi = useMidi({ onMessage: handleMidiMessage })
