@@ -41,6 +41,8 @@ export interface BurstOptions {
   x?: number
   y?: number
   speed?: number
+  /** Random positional jitter radius — each particle's start is offset by up to this many px. */
+  spread?: number
   r?: number
   g?: number
   b?: number
@@ -291,11 +293,14 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
     const cx = options.x ?? (canvas ? canvas.offsetWidth / 2 : 0)
     const cy = options.y ?? (canvas ? canvas.offsetHeight / 2 : 0)
     const speed = options.speed ?? 1
+    const spread = options.spread ?? 0
     for (let i = 0; i < options.count; i++) {
       const angle = Math.random() * Math.PI * 2
+      const sx = spread > 0 ? cx + (Math.random() - 0.5) * 2 * spread : cx
+      const sy = spread > 0 ? cy + (Math.random() - 0.5) * 2 * spread : cy
       spawnParticle(buf, group.start, group.end, group.activeCount, {
-        x: cx,
-        y: cy,
+        x: sx,
+        y: sy,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
         r: options.r,

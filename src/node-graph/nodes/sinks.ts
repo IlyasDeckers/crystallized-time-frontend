@@ -54,6 +54,7 @@ export const burstDef: NodeDef = {
     group: { type: "string", label: "Group", default: "default" },
     count: { type: "number", label: "Count", default: 10, min: 1, max: 100 },
     speed: { type: "number", label: "Speed", default: 60, min: 1, max: 500 },
+    spread: { type: "number", label: "Spread", default: 0, min: 0, max: 200 },
   },
 }
 
@@ -64,10 +65,12 @@ export const evaluateBurst: NodeEvaluator = ({ config, inputs, state, ctx }) => 
     const group = (config.group as string) ?? "default"
     const count = (config.count as number) ?? 10
     const speed = (config.speed as number) ?? 60
+    const spread = (config.spread as number) ?? 0
     ctx.engineBurst({
       group,
       count,
       speed,
+      spread,
       x: inputs.x !== undefined ? inputs.x : undefined,
       y: inputs.y !== undefined ? inputs.y : undefined,
     })

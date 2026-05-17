@@ -53,6 +53,7 @@ export function ParticlesStage({
           x: Math.random() * w,
           y: Math.random() * h,
           speed: initialSpeed,
+          spread: 40,
           r: 255, g: 255, b: 255,
           opacity: 0.95,
           size: 1,

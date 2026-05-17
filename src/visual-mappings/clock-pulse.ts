@@ -18,8 +18,8 @@ export function createClockPulse(engine: UseParticlesResult): ClockPulse {
     canvasSize: { w: number; h: number },
   ): void {
     const { magnetization } = event
-    const cx = canvasSize.w / 2
-    const cy = canvasSize.h / 2
+    const cx = canvasSize.w / 2 + (Math.random() - 0.5) * canvasSize.w * 0.3
+    const cy = canvasSize.h / 2 + (Math.random() - 0.5) * canvasSize.h * 0.3
     const hue = magnetization >= 0 ? 30 : 210
     const [r, g, b] = hslToRgb(hue, 1.0, 0.65)
     const speed = 80 + Math.abs(magnetization) * 80
@@ -30,6 +30,7 @@ export function createClockPulse(engine: UseParticlesResult): ClockPulse {
       x: cx,
       y: cy,
       speed,
+      spread: 15,
       r, g, b,
       opacity: 0.9,
       size: 3,

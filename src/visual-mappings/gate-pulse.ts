@@ -17,8 +17,8 @@ export function handleGatePulse(
   const zone = chainCfg.zones.sites
   const { siteCount } = config
 
-  const x = zone.x + ((site + 0.5) / siteCount) * zone.w
-  const y = zone.y + zone.h * 0.5
+  const x = zone.x + ((site + 0.5) / siteCount) * zone.w + (Math.random() - 0.5) * zone.w * 0.3
+  const y = zone.y + zone.h * 0.5 + (Math.random() - 0.5) * zone.h * 0.3
 
   const speed = 20 + (velocity / 127) * 80
   const [r, g, b] = hslToRgb(chainCfg.hue, 0.9, 0.6)
@@ -30,6 +30,7 @@ export function handleGatePulse(
     x,
     y,
     speed,
+    spread: 10,
     r,
     g,
     b,

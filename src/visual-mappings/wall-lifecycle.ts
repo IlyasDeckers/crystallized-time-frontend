@@ -66,8 +66,8 @@ export function createWallLifecycle(
     const idx = wallMap.get(id)
     if (idx === undefined) return
     const base = idx * STRIDE
-    const x = buf.data[base + F.X]
-    const y = buf.data[base + F.Y]
+    const x = buf.data[base + F.X] + (Math.random() - 0.5) * 20
+    const y = buf.data[base + F.Y] + (Math.random() - 0.5) * 20
     const [r, g, b] = hslToRgb(wallHue(chain), 1.0, 0.85)
     const group = chain === "a" ? "chain_a_walls" : "chain_b_walls"
 
@@ -78,9 +78,9 @@ export function createWallLifecycle(
 
     if (actualLifetime < 0.2) {
       const [ar, ag, ab] = hslToRgb(wallHue(chain), 1.0, 0.92)
-      engine.burst({ group, count: 20, x, y, speed: 120, r: ar, g: ag, b: ab, opacity: 1.0, size: 4, lifetime: 1.5 })
+      engine.burst({ group, count: 20, x, y, speed: 120, spread: 12, r: ar, g: ag, b: ab, opacity: 1.0, size: 4, lifetime: 1.5 })
     } else {
-      engine.burst({ group, count: 8, x, y, speed: 60, r, g, b, opacity: 1.0, size: 3, lifetime: 0.8 })
+      engine.burst({ group, count: 8, x, y, speed: 60, spread: 8, r, g, b, opacity: 1.0, size: 3, lifetime: 0.8 })
     }
 
     engine.kill(idx)
@@ -108,7 +108,11 @@ export function createWallLifecycle(
   }
 
   function handleWallNoteOff(event: Extract<BackendEvent, { type: "wall_note_off" }>): void {
-    handleWallDestroyed({ type: "wall_destroyed", chain: event.chain, id: event.pitch, lastPosition: 0, lifetime: 0 })
+    const idx = wallMap.get(event.pitch)
+    if (idx === undefined) return
+    const base = idx * STRIDE
+    const lastPosition = buf.data[base + F.X]
+    handleWallDestroyed({ type: "wall_destroyed", chain: event.chain, id: event.pitch, lastPosition, lifetime: 0 })
   }
 
   const frameHook: FrameHook = ({ buf: b, dt }) => {

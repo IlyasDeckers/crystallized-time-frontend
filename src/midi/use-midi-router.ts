@@ -260,6 +260,7 @@ export function useMidiRouter(
       count: 1,
       x, y,
       speed: 30 + (midiVelocity / 127) * 120,
+      spread: 5,
       opacity: 0.7,
       size: 3.5,
       lifetime: particleLifetime,

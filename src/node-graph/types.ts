@@ -78,7 +78,7 @@ export interface EvalContext {
   dt: number
   canvasSize: { w: number; h: number }
   paramStoreSet: (key: string, value: number) => void
-  engineBurst: ((options: { group: string; count: number; x?: number; y?: number; speed?: number }) => void) | null
+  engineBurst: ((options: { group: string; count: number; x?: number; y?: number; speed?: number; spread?: number }) => void) | null
   pulseFire: ((particleIndex?: number, charge?: number, bright?: boolean) => void) | null
 }
 
@@ -107,7 +107,7 @@ export interface NodeRegistryEntry {
 
 export interface ExecutorDeps {
   paramStoreSet: (key: string, value: number) => void
-  engineBurst: ((options: { group: string; count: number; x?: number; y?: number; speed?: number }) => void) | null
+  engineBurst: ((options: { group: string; count: number; x?: number; y?: number; speed?: number; spread?: number }) => void) | null
   pulseFire: ((particleIndex?: number, charge?: number, bright?: boolean) => void) | null
   oscSubscribe: (address: string, cb: (args: unknown[]) => void) => () => void
   canvasSize: { w: number; h: number }
