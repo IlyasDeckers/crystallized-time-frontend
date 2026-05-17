@@ -170,7 +170,7 @@ let scriptPromise: Promise<void> | null = null
 
 function loadParticlesScript(): Promise<void> {
   if (scriptPromise) return scriptPromise
-  if (typeof window !== "undefined" && window.particlesJS) {
+  if (typeof window !== "undefined" && "particlesJS" in window) {
     scriptPromise = Promise.resolve()
     return scriptPromise
   }
@@ -196,11 +196,14 @@ export function useParticles(
 
   const [ready, setReady] = useState(false)
   const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 })
+  // pjsRef is used inside the animation loop (no re-renders).
+  // pjsState is the same instance exposed to callers during render.
+  const [pjsState, setPjsState] = useState<PJSInstance | null>(null)
   const pjsRef = useRef<PJSInstance | null>(null)
   const frameHooksRef = useRef<Set<FrameHook>>(new Set())
   const rafRef = useRef<number>(0)
-  const startTimeRef = useRef(performance.now())
-  const lastTimeRef = useRef(performance.now())
+  const startTimeRef = useRef(0)
+  const lastTimeRef = useRef(0)
 
   // -------------------------------------------------------------------------
   // Our draw loop — runs INSTEAD of particles.js's own loop
@@ -210,6 +213,11 @@ export function useParticles(
     if (pjs.fn.drawAnimFrame) {
       ;(window.cancelRequestAnimFrame ?? cancelAnimationFrame)(pjs.fn.drawAnimFrame)
     }
+
+    // Capture start time here, not during render.
+    const loopStart = performance.now()
+    startTimeRef.current = loopStart
+    lastTimeRef.current = loopStart
 
     const tick = () => {
       const now = performance.now()
@@ -259,6 +267,7 @@ export function useParticles(
           if (instance?.particles?.array?.length > 0) {
             clearInterval(poll)
             pjsRef.current = instance
+            setPjsState(instance)
 
             // Give pJS one frame to finish its own init draw, then take over
             requestAnimationFrame(() => {
@@ -318,8 +327,8 @@ export function useParticles(
 
   return {
     ready,
-    pjs: pjsRef.current,
-    particles: pjsRef.current?.particles.array ?? [],
+    pjs: pjsState,
+    particles: pjsState?.particles.array ?? [],
     addFrameHook,
     setConfig,
     burst,
@@ -348,6 +357,6 @@ function drawManually(pjs: PJSInstance) {
   // Draw each particle
   const array = pjs.particles.array
   for (let i = 0; i < array.length; i++) {
-    array[i].draw()
+    ;(array[i] as unknown as { draw: () => void }).draw()
   }
 }

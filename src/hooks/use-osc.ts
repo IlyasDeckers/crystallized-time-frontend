@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-// @ts-expect-error - osc-js has no bundled types
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore
 import OSC from "osc-js"
 
 export interface OscInboundMessage {
@@ -49,7 +50,7 @@ export function useOsc({
                          autoConnect = true,
                          logSize = 200,
                        }: UseOscOptions = {}): UseOscResult {
-  const [status, setStatus] = useState<OscStatus>("idle")
+  const [status, setStatus] = useState<OscStatus>(autoConnect ? "connecting" : "idle")
   const [error, setError] = useState<string | null>(null)
   const [messages, setMessages] = useState<OscInboundMessage[]>([])
 
@@ -61,8 +62,10 @@ export function useOsc({
     new Map()
   )
 
-  const connect = useCallback(() => {
-    // Tear down any previous instance first so reconnect works cleanly.
+  // Opens the OSC connection without touching React state synchronously.
+  // All state updates happen inside event callbacks, which is the pattern
+  // that avoids cascading renders when called from a useEffect body.
+  const openOsc = useCallback(() => {
     if (oscRef.current) {
       try {
         oscRef.current.close()
@@ -72,10 +75,6 @@ export function useOsc({
       oscRef.current = null
     }
 
-    setStatus("connecting")
-    setError(null)
-
-    // osc-js's WebsocketClientPlugin parses ws://host:port itself.
     const u = new URL(url)
     const plugin = new OSC.WebsocketClientPlugin({
       host: u.hostname,
@@ -111,9 +110,6 @@ export function useOsc({
         return [...next, entry]
       })
 
-      // Dispatch to address-specific subscribers. osc-js's own .on() does
-      // wildcard matching, but routing through our own map keeps the
-      // subscribe/unsubscribe lifecycle predictable across re-renders.
       const subs = subscribersRef.current.get(message.address)
       if (subs) for (const cb of subs) cb(message.args)
     })
@@ -125,6 +121,14 @@ export function useOsc({
       setError(err instanceof Error ? err.message : String(err))
     }
   }, [url, logSize])
+
+  // Public connect: sets optimistic "connecting" state then opens the socket.
+  // Safe to call from user events; not called from effects.
+  const connect = useCallback(() => {
+    setStatus("connecting")
+    setError(null)
+    openOsc()
+  }, [openOsc])
 
   const disconnect = useCallback(() => {
     const osc = oscRef.current
@@ -171,8 +175,12 @@ export function useOsc({
   )
 
   useEffect(() => {
-    if (autoConnect) connect()
+    // Defer to a macrotask so no setState runs synchronously inside this effect,
+    // even via the catch block in openOsc. Status is pre-set to "connecting"
+    // by the lazy useState initializer so the UI shows the right state immediately.
+    const id = autoConnect ? setTimeout(openOsc, 0) : undefined
     return () => {
+      clearTimeout(id)
       const osc = oscRef.current
       if (osc) {
         try {
@@ -183,8 +191,7 @@ export function useOsc({
         oscRef.current = null
       }
     }
-    // We deliberately only auto-connect on mount; manual reconnects go
-    // through connect().
+    // Only auto-connect on mount; manual reconnects go through connect().
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
