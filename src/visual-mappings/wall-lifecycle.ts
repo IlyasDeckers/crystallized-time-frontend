@@ -52,7 +52,7 @@ export function createWallLifecycle(
       y: wallY(chain),
       r, g, b,
       opacity: 1.0,
-      size: 6,
+      size: 4,
       lifetime: Infinity,
     })
     if (idx >= 0) {

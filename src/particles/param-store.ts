@@ -83,6 +83,7 @@ class ParamStoreImpl {
 
   /** Lerp a numeric param to target over N frames (at assumed fps). */
   setLerp(key: ParamKey, target: number, frames: number, fps = 60): void {
+    if (typeof PARAM_DEFS[key].default === "string") return
     if (frames <= 0) { this.set(key, target); return }
     const clamped = clampValue(key, target) as number
     this.lerps.set(key, {

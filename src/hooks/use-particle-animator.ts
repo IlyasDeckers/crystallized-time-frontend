@@ -99,8 +99,9 @@ export function useParticleAnimator(
       const buf = particlesApiRef.current?.buf
       if (restoreVelocityOnRelease && buf) {
         const capacity = buf.capacity
+        const savedLen = savedVxRef.current.length
         for (let i = 0; i < capacity; i++) {
-          if (!hasSavedRef.current[i]) continue
+          if (i >= savedLen || !hasSavedRef.current[i]) continue
           const b = i * STRIDE
           if (buf.data[b + F.AGE] < buf.data[b + F.LIFETIME]) {
             buf.data[b + F.VX] = savedVxRef.current[i]

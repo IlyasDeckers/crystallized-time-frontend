@@ -3,8 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react"
 export interface MidiMessage {
   /** 0-15 (channel 1 in UI = 0 here) */
   channel: number
-  /** "noteOn" | "noteOff" | "cc" | "other" */
-  type: "noteOn" | "noteOff" | "cc" | "other"
+  /** "noteOn" | "noteOff" | "cc" | "programChange" | "other" */
+  type: "noteOn" | "noteOff" | "cc" | "programChange" | "other"
   /** Note number for noteOn/noteOff, CC number for cc */
   data1: number
   /** Velocity for noteOn/noteOff, value for cc */
@@ -46,6 +46,7 @@ function parseMessage(data: Uint8Array, timestamp: number): MidiMessage {
   if (high === 0x90 && data[2] > 0) type = "noteOn"
   else if (high === 0x80 || (high === 0x90 && data[2] === 0)) type = "noteOff"
   else if (high === 0xb0) type = "cc"
+  else if (high === 0xc0) type = "programChange"
   return { channel, type, data1: data[1] ?? 0, data2: data[2] ?? 0, timestamp }
 }
 
@@ -89,21 +90,22 @@ export function useMidi({ onMessage }: UseMidiOptions = {}): UseMidiResult {
   // Wire up the selected input's message handler
   useEffect(() => {
     const access = accessRef.current
-    if (!access) return
+    if (!access || !selectedInput) return
     const handler = (event: MIDIMessageEvent) => {
       const msg = parseMessage(event.data!, event.timeStamp)
       onMessageRef.current?.(msg)
     }
 
+    let activeInput: MIDIInput | null = null
     for (const input of access.inputs.values()) {
-      input.onmidimessage = null
-    }
-    if (selectedInput) {
-      for (const input of access.inputs.values()) {
-        if (input.name === selectedInput) {
-          input.onmidimessage = handler
-        }
+      if (input.name === selectedInput) {
+        input.addEventListener("midimessage", handler as EventListener)
+        activeInput = input
+        break
       }
+    }
+    return () => {
+      if (activeInput) activeInput.removeEventListener("midimessage", handler as EventListener)
     }
   }, [selectedInput, status])
 

@@ -14,7 +14,7 @@ export interface RenderConfig {
 
 export const DEFAULT_RENDER_CONFIG: RenderConfig = {
   linkDistance: 130,
-  linkOpacity: 0.35,
+  linkOpacity: 0.8,
   trailMode: false,
   trailDecay: 0.15,
   glowAmount: 0,

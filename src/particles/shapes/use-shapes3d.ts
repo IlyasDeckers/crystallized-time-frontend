@@ -133,7 +133,7 @@ export function useShapes3D(
         const rotated = applyMat3(mat, scaled)
         const fl = focalLength
         const d = depth
-        const w = fl / (rotated.z + d * s + fl)
+        const w = fl / Math.max(1, rotated.z + d * s + fl)
         return {
           x: cx + rotated.x * w,
           y: cy + rotated.y * w,

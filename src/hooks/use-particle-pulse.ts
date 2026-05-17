@@ -76,6 +76,8 @@ export function useParticlePulse(
 
   const chargesRef = useRef<Float32Array>(new Float32Array(0))
   const brightFlagRef = useRef<Uint8Array>(new Uint8Array(0))
+  const nextChargesRef = useRef<Float32Array>(new Float32Array(0))
+  const nextBrightRef = useRef<Uint8Array>(new Uint8Array(0))
   const neighboursRef = useRef<Map<number, number[]>>(new Map())
   const frameCountRef = useRef(0)
   const particlesApiRef = useRef(particlesApi)
@@ -87,6 +89,8 @@ export function useParticlePulse(
     if (chargesRef.current.length !== capacity) {
       chargesRef.current = new Float32Array(capacity)
       brightFlagRef.current = new Uint8Array(capacity)
+      nextChargesRef.current = new Float32Array(capacity)
+      nextBrightRef.current = new Uint8Array(capacity)
     }
 
     // Collect alive indices
@@ -107,8 +111,10 @@ export function useParticlePulse(
 
     const charges = chargesRef.current
     const brights = brightFlagRef.current
-    const nextCharges = new Float32Array(capacity)
-    const nextBright = new Uint8Array(capacity)
+    const nextCharges = nextChargesRef.current
+    const nextBright = nextBrightRef.current
+    nextCharges.fill(0)
+    nextBright.fill(0)
 
     for (const i of alive) {
       const c = charges[i]
@@ -127,6 +133,8 @@ export function useParticlePulse(
 
     chargesRef.current = nextCharges
     brightFlagRef.current = nextBright
+    nextChargesRef.current = charges
+    nextBrightRef.current = brights
 
     // Write color + charge into buffer
     for (const i of alive) {

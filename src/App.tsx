@@ -6,6 +6,10 @@ import { OscSendCard } from '@/components/ui/osc-send-card'
 import { MidiSettingsCard, DEFAULT_MIDI_SETTINGS, type MidiSettings } from '@/components/ui/midi-settings-card'
 import { ParticlesStage } from '@/components/ui/particles-stage'
 import { PhotoLayer } from '@/components/ui/photo-layer'
+import { ScenePresets } from '@/components/ui/scene-presets'
+import { ConnectionStatus } from '@/components/ui/connection-status'
+import { ChannelStrip } from '@/components/ui/channel-strip'
+import { ParameterDashboard } from '@/components/ui/parameter-dashboard'
 import { useMidi, type MidiMessage } from '@/hooks/use-midi'
 import { useOsc } from '@/hooks/use-osc'
 import { useShapes3D, SHAPE_3D_NAMES, type Shape3DName } from '@/hooks/use-shapes3d'
@@ -17,6 +21,8 @@ import { useVisualMappings } from '@/visual-mappings'
 import { useMidiRouter } from '@/midi/use-midi-router'
 import { setupMidiThru } from '@/midi/thru'
 import { useParamOscBridge } from '@/particles/param-osc-bridge'
+import { sceneStore } from '@/scenes/store'
+import { midiLearn } from '@/midi/learn'
 
 const OSC_LOG_VISIBLE = 8
 
@@ -34,11 +40,51 @@ function App() {
   const [debugOpen, setDebugOpen] = useState(true)
   const [sendOpen, setSendOpen] = useState(true)
   const [midiOpen, setMidiOpen] = useState(true)
+  const [scenesOpen, setScenesOpen] = useState(false)
+  const [channelStripOpen, setChannelStripOpen] = useState(false)
+  const [paramDashOpen, setParamDashOpen] = useState(false)
   const [midiSettings, setMidiSettings] = useState<MidiSettings>(DEFAULT_MIDI_SETTINGS)
   const [midiActivity, setMidiActivity] = useState(0)
+  const [mutedChannels, setMutedChannels] = useState<Set<number>>(new Set())
   const lastMidiRef = useRef<MidiMessage | null>(null)
   const [photoVisible, setPhotoVisible] = useState(false)
   const photoCanvasRef = useRef<HTMLCanvasElement | null>(null)
+
+  // Debug overlay extras
+  const [fps, setFps] = useState(0)
+  const fpsFramesRef = useRef<number[]>([])
+  const [bpm, setBpm] = useState<number | null>(null)
+  const clockTimesRef = useRef<number[]>([])
+  const [magnetization, setMagnetization] = useState<number | null>(null)
+  const [wallCount, setWallCount] = useState<number | null>(null)
+
+  // FPS counter via rAF
+  useEffect(() => {
+    let rafId: number
+    let last = performance.now()
+    function tick() {
+      const now = performance.now()
+      fpsFramesRef.current.push(now - last)
+      last = now
+      if (fpsFramesRef.current.length > 60) fpsFramesRef.current.shift()
+      const avg = fpsFramesRef.current.reduce((a, b) => a + b, 0) / fpsFramesRef.current.length
+      setFps(Math.round(1000 / avg))
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
+  }, [])
+
+  // MIDI message subscriber for ChannelStrip
+  type MidiSubCb = (msg: MidiMessage) => void
+  const midiSubsRef = useRef<Set<MidiSubCb>>(new Set())
+  const subscribeToMidi = useCallback(
+    (cb: (msg: MidiMessage) => void): (() => void) => {
+      midiSubsRef.current.add(cb)
+      return () => { midiSubsRef.current.delete(cb) }
+    },
+    []
+  )
 
   // -------------------------------------------------------------------------
   // Particles
@@ -66,6 +112,29 @@ function App() {
   // -------------------------------------------------------------------------
   const bridge = useBackendBridge(osc)
   useVisualMappings(particlesApi, bridge, osc)
+
+  // Update debug magnetization and wall count from state events
+  useEffect(() => {
+    return bridge.subscribe((event) => {
+      if (event.type === 'state') {
+        setMagnetization(event.magnetization)
+        setWallCount(event.wallCount)
+      }
+      if (event.type === 'clock_pulse') {
+        const now = performance.now()
+        clockTimesRef.current.push(now)
+        if (clockTimesRef.current.length > 8) clockTimesRef.current.shift()
+        if (clockTimesRef.current.length >= 2) {
+          const intervals = clockTimesRef.current.slice(1).map(
+            (t, i) => t - clockTimesRef.current[i]
+          )
+          const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length
+          // MIDI clock = 24 pulses per quarter note
+          setBpm(Math.round(60_000 / (avgInterval * 24)))
+        }
+      }
+    })
+  }, [bridge.subscribe])
 
   // OSC: photo layer toggle
   useEffect(() => {
@@ -98,9 +167,33 @@ function App() {
   const bridgeRef = useRef(bridge)
   useEffect(() => { bridgeRef.current = bridge }, [bridge])
 
+  const mutedChannelsRef = useRef(mutedChannels)
+  useEffect(() => { mutedChannelsRef.current = mutedChannels }, [mutedChannels])
+
   const handleMidiMessage = useCallback((msg: MidiMessage) => {
     lastMidiRef.current = msg
     setMidiActivity((n) => (n + 1) % 1_000_000)
+
+    // Notify channel strip subscribers
+    for (const sub of midiSubsRef.current) sub(msg)
+
+    // MIDI learn: intercept CC if learning
+    if (msg.type === 'cc' && midiLearn.isLearning()) {
+      midiLearn.onCC(msg.data1)
+      return
+    }
+
+    // Program change → load scene by program number
+    if (msg.type === 'programChange') {
+      const scenes = sceneStore.list()
+      const scene = scenes[msg.data1]
+      if (scene) sceneStore.load(scene)
+      return
+    }
+
+    // Skip muted channels for visual effects
+    if (mutedChannelsRef.current.has(msg.channel)) return
+
     routerRef.current.handleMidi(msg)
     bridgeRef.current.handleMidi(msg)
   }, [])
@@ -140,10 +233,13 @@ function App() {
           initialSpeed={60}
           config={{
             maxParticles: 4096,
-            renderConfig: { linkDistance: 130, linkOpacity: 0.35 },
+            renderConfig: { linkDistance: 130, linkOpacity: 0.8 },
           }}
           onReady={setParticlesApi}
         />
+
+        {/* Connection status indicator (top-right) */}
+        <ConnectionStatus osc={osc} />
 
         {/* Debug card */}
         <DraggableCard
@@ -207,6 +303,32 @@ function App() {
                   ? `${countAlive(particlesApi)} / ${particlesApi.buf.capacity}`
                   : 'loading…'}
               </div>
+            </div>
+
+            {/* Performance + state metrics */}
+            <div className="pt-1 border-t border-border/50 space-y-0.5">
+              <div className="flex justify-between text-[10px]">
+                <span className="text-muted-foreground">fps</span>
+                <span className="text-foreground">{fps}</span>
+              </div>
+              {bpm !== null && (
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-muted-foreground">bpm</span>
+                  <span className="text-foreground">{bpm}</span>
+                </div>
+              )}
+              {magnetization !== null && (
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-muted-foreground">magnetization</span>
+                  <span className="text-foreground">{magnetization.toFixed(3)}</span>
+                </div>
+              )}
+              {wallCount !== null && (
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-muted-foreground">walls</span>
+                  <span className="text-foreground">{wallCount}</span>
+                </div>
+              )}
             </div>
 
             {/* 3D shape picker */}
@@ -317,6 +439,30 @@ function App() {
               </button>
             </div>
 
+            {/* Panel launchers */}
+            <div className="pt-1 border-t border-border/50">
+              <div className="flex flex-wrap gap-1">
+                <button
+                  onClick={() => setScenesOpen((v) => !v)}
+                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px]"
+                >
+                  {scenesOpen ? 'hide scenes' : 'scenes'}
+                </button>
+                <button
+                  onClick={() => setChannelStripOpen((v) => !v)}
+                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px]"
+                >
+                  {channelStripOpen ? 'hide channels' : 'channels'}
+                </button>
+                <button
+                  onClick={() => setParamDashOpen((v) => !v)}
+                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px]"
+                >
+                  {paramDashOpen ? 'hide params' : 'params'}
+                </button>
+              </div>
+            </div>
+
             {/* OSC */}
             <div className="pt-1 border-t border-border/50">
               <div className="flex items-center justify-between">
@@ -360,6 +506,49 @@ function App() {
             </div>
 
           </div>
+        </DraggableCard>
+
+        {/* Scene presets card */}
+        <DraggableCard
+          title="scenes"
+          open={scenesOpen}
+          onClose={() => setScenesOpen(false)}
+          defaultPosition={{ x: 320, y: 72 }}
+          defaultWidth={240}
+        >
+          <ScenePresets osc={osc} fadeDuration={2000} />
+        </DraggableCard>
+
+        {/* 16-channel MIDI strip */}
+        <DraggableCard
+          title="midi channels"
+          open={channelStripOpen}
+          onClose={() => setChannelStripOpen(false)}
+          defaultPosition={{ x: 580, y: 72 }}
+          defaultWidth={260}
+        >
+          <ChannelStrip
+            subscribe={subscribeToMidi}
+            onMuteChange={(ch, muted) => {
+              setMutedChannels((prev) => {
+                const next = new Set(prev)
+                if (muted) next.add(ch)
+                else next.delete(ch)
+                return next
+              })
+            }}
+          />
+        </DraggableCard>
+
+        {/* Parameter dashboard */}
+        <DraggableCard
+          title="parameters"
+          open={paramDashOpen}
+          onClose={() => setParamDashOpen(false)}
+          defaultPosition={{ x: 860, y: 72 }}
+          defaultWidth={280}
+        >
+          <ParameterDashboard />
         </DraggableCard>
 
         <OscSendCard

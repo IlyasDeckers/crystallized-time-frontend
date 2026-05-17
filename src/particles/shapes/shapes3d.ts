@@ -52,7 +52,7 @@ export function sphereVerts(n = 80): Vec3[] {
   const verts: Vec3[] = []
   const phi = Math.PI * (3 - Math.sqrt(5))
   for (let i = 0; i < n; i++) {
-    const y = 1 - (i / (n - 1)) * 2
+    const y = n <= 1 ? 0 : 1 - (i / (n - 1)) * 2
     const r = Math.sqrt(1 - y * y)
     const theta = phi * i
     verts.push({ x: Math.cos(theta) * r, y, z: Math.sin(theta) * r })
@@ -249,12 +249,20 @@ export function trefoilVerts(n = 80, tube = 0.2): Vec3[] {
       const ty = -Math.sin(u) + 4 * Math.sin(2 * u)
       const tz = -3 * Math.cos(3 * u)
       const tl = Math.sqrt(tx*tx + ty*ty + tz*tz)
-      const bx = (ty * 1 - tz * 0) / tl
-      const by = (tz * 0 - tx * 1) / tl
-      const bz = (tx * 0 - ty * 0) / tl
-      const nx = ty/tl * bz - tz/tl * by
-      const ny = tz/tl * bx - tx/tl * bz
-      const nz = tx/tl * by - ty/tl * bx
+      const tNx = tx / tl, tNy = ty / tl, tNz = tz / tl
+
+      // Gram-Schmidt: choose up vector not parallel to tangent
+      let ux = 0, uy = 1, uz = 0
+      if (Math.abs(tNy) > 0.9) { ux = 1; uy = 0; uz = 0 }
+      const dot = ux * tNx + uy * tNy + uz * tNz
+      const nRx = ux - dot * tNx, nRy = uy - dot * tNy, nRz = uz - dot * tNz
+      const nl = Math.sqrt(nRx*nRx + nRy*nRy + nRz*nRz)
+      const nx = nRx / nl, ny = nRy / nl, nz = nRz / nl
+
+      // Binormal: B = T × N
+      const bx = tNy * nz - tNz * ny
+      const by = tNz * nx - tNx * nz
+      const bz = tNx * ny - tNy * nx
       verts.push({
         x: (cx + tube * (nx * Math.cos(v) + bx * Math.sin(v))) / 3.5,
         y: (cy + tube * (ny * Math.cos(v) + by * Math.sin(v))) / 3.5,

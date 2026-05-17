@@ -49,13 +49,13 @@ export function ParticlesStage({
       for (let i = 0; i < initialCount; i++) {
         particles.burst({
           group: "ambient",
-          count: 1,
+          count: 2,
           x: Math.random() * w,
           y: Math.random() * h,
           speed: initialSpeed,
-          r: 1, g: 1, b: 1,
-          opacity: 0.7,
-          size: 3.5,
+          r: 255, g: 255, b: 255,
+          opacity: 0.95,
+          size: 1,
         })
       }
     }
