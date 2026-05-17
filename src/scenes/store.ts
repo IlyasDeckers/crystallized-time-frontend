@@ -1,10 +1,14 @@
 import { paramStore, PARAM_DEFS, type ParamKey } from "@/particles/param-store"
 import type { Scene } from "./types"
+import type { NodeGraph } from "@/node-graph/types"
 
 const STORAGE_KEY = "ct:scenes"
 
 type LoadHandler = (scene: Scene) => void
 const loadHandlers = new Set<LoadHandler>()
+
+type NodeGraphProvider = () => NodeGraph | null
+let nodeGraphProvider: NodeGraphProvider | null = null
 
 function readAll(): Record<string, Scene> {
   try {
@@ -25,7 +29,12 @@ export const sceneStore = {
     for (const key of Object.keys(PARAM_DEFS) as ParamKey[]) {
       params[key] = paramStore.get(key)
     }
-    scenes[name] = { name, createdAt: Date.now(), params }
+    const scene: Scene = { name, createdAt: Date.now(), params }
+    const graph = nodeGraphProvider?.()
+    if (graph && graph.nodes.length > 0) {
+      scene.nodeGraph = graph
+    }
+    scenes[name] = scene
     writeAll(scenes)
   },
 
@@ -63,5 +72,10 @@ export const sceneStore = {
   onLoad(handler: LoadHandler): () => void {
     loadHandlers.add(handler)
     return () => { loadHandlers.delete(handler) }
+  },
+
+  /** Provide a callback that returns the current node graph for inclusion in saves. */
+  setNodeGraphProvider(provider: NodeGraphProvider | null): void {
+    nodeGraphProvider = provider
   },
 }

@@ -22,3 +22,5 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+# CocoIndex Code (ccc)
+/.cocoindex_code/

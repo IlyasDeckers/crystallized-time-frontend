@@ -198,7 +198,7 @@ export function useOsc({
       const entry: OscInboundMessage = {
         id,
         address: message.address,
-        args: message.args,
+        args: message.args ?? [],
         receivedAt: Date.now(),
       }
       setMessages((prev) => {

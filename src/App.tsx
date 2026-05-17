@@ -23,6 +23,10 @@ import { setupMidiThru } from '@/midi/thru'
 import { useParamOscBridge } from '@/particles/param-osc-bridge'
 import { sceneStore } from '@/scenes/store'
 import { midiLearn } from '@/midi/learn'
+import { useNodeGraph } from '@/node-graph/use-node-graph'
+import { loadGraph, saveGraph, EMPTY_GRAPH } from '@/node-graph/store'
+import type { NodeGraph } from '@/node-graph/types'
+import { NodeGraphEditor } from '@/components/ui/node-graph-editor'
 
 const OSC_LOG_VISIBLE = 8
 
@@ -49,6 +53,24 @@ function App() {
   const lastMidiRef = useRef<MidiMessage | null>(null)
   const [photoVisible, setPhotoVisible] = useState(false)
   const photoCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [nodeGraph, setNodeGraph] = useState<NodeGraph>(
+    () => loadGraph() ?? EMPTY_GRAPH
+  )
+  const [nodeGraphOpen, setNodeGraphOpen] = useState(false)
+
+  // Keep a ref of the current graph so sceneStore can snapshot it on save
+  const nodeGraphRef = useRef(nodeGraph)
+  nodeGraphRef.current = nodeGraph
+
+  // Debounced auto-save (500ms) to avoid thrashing localStorage during drag
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const debouncedSaveGraph = useCallback((g: NodeGraph) => {
+    if (autoSaveTimerRef.current !== null) clearTimeout(autoSaveTimerRef.current)
+    autoSaveTimerRef.current = setTimeout(() => {
+      saveGraph(g)
+      autoSaveTimerRef.current = null
+    }, 500)
+  }, [])
 
   // Debug overlay extras
   const [fps, setFps] = useState(0)
@@ -160,6 +182,31 @@ function App() {
 
   const routerRef = useRef(router)
   useEffect(() => { routerRef.current = router }, [router])
+
+  // -------------------------------------------------------------------------
+  // Node graph executor (additive layer — runs alongside existing router)
+  // -------------------------------------------------------------------------
+  useNodeGraph(nodeGraph, {
+    particlesApi,
+    osc,
+    pulse: router.pulse,
+    subscribeMidi: subscribeToMidi,
+  })
+
+  // Scene integration: provide current node-graph to sceneStore for inclusion in saves
+  useEffect(() => {
+    sceneStore.setNodeGraphProvider(() => nodeGraphRef.current)
+    return () => { sceneStore.setNodeGraphProvider(null) }
+  }, [])
+
+  // Restore node-graph when a scene is loaded
+  useEffect(() => {
+    return sceneStore.onLoad((scene) => {
+      if (scene.nodeGraph) {
+        setNodeGraph(scene.nodeGraph)
+      }
+    })
+  }, [])
 
   // -------------------------------------------------------------------------
   // MIDI
@@ -460,6 +507,12 @@ function App() {
                 >
                   {paramDashOpen ? 'hide params' : 'params'}
                 </button>
+                <button
+                  onClick={() => setNodeGraphOpen((v) => !v)}
+                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px]"
+                >
+                  {nodeGraphOpen ? 'hide graph' : 'node graph'}
+                </button>
               </div>
             </div>
 
@@ -549,6 +602,23 @@ function App() {
           defaultWidth={280}
         >
           <ParameterDashboard />
+        </DraggableCard>
+
+        {/* Node graph editor */}
+        <DraggableCard
+          title="node graph"
+          open={nodeGraphOpen}
+          onClose={() => setNodeGraphOpen(false)}
+          defaultPosition={{ x: 200, y: 100 }}
+          defaultWidth={700}
+        >
+          <NodeGraphEditor
+            graph={nodeGraph}
+            onChange={(g) => {
+              debouncedSaveGraph(g)
+              setNodeGraph(g)
+            }}
+          />
         </DraggableCard>
 
         <OscSendCard
