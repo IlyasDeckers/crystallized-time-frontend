@@ -4,6 +4,10 @@ import {
   createBuffer, spawnParticle, killParticle,
   type ParticleBuffer, STRIDE, F,
 } from "./buffer"
+import { DEFAULT_RENDER_CONFIG, type RenderConfig } from "./renderer"
+import type { Renderer } from "./renderer"
+import { WebGLRenderer } from "./renderer-webgl"
+import { Canvas2DRenderer } from "./renderer-canvas2d"
 
 export type { ParticleBuffer }
 
@@ -13,8 +17,10 @@ export type { ParticleBuffer }
 
 export interface EngineConfig {
   maxParticles?: number
-  /** "auto" picks WebGL when available, falls back to canvas2d. */
+  /** "auto" tries WebGL2, falls back to canvas2d. */
   renderer?: "webgl" | "canvas2d" | "auto"
+  /** Override any default render settings. */
+  renderConfig?: Partial<RenderConfig>
   /** Max seconds per frame passed to hooks (default 0.1). */
   dtCap?: number
 }
@@ -52,7 +58,6 @@ export interface UseParticlesResult {
   groups: {
     addGroup: (name: string, config: GroupConfig) => void
     removeGroup: (name: string) => void
-    /** Associate a shape name with the group for later use by animator hooks. */
     setGroupShape: (name: string, shape: string) => void
   }
   burst: (options: BurstOptions) => void
@@ -86,7 +91,6 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
   const rafRef = useRef(0)
   const startTimeRef = useRef(0)
   const lastTimeRef = useRef(0)
-  // Keep dtCap readable inside rAF without recreating the closure
   const dtCapRef = useRef(dtCap)
   dtCapRef.current = dtCap
 
@@ -94,9 +98,37 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
   const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 })
 
   // -------------------------------------------------------------------------
-  // rAF loop — starts once on mount, runs for the lifetime of the component
+  // Main effect: creates renderer, ResizeObserver, and rAF loop together.
+  // Runs once on mount; canvas is guaranteed to be in the DOM at that point.
   // -------------------------------------------------------------------------
   useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    // Build render config from defaults + caller overrides
+    const renderConfig: RenderConfig = { ...DEFAULT_RENDER_CONFIG, ...config.renderConfig }
+
+    // Create renderer — WebGL2 preferred, Canvas2D as fallback
+    let renderer: Renderer
+    const mode = config.renderer ?? "auto"
+    try {
+      renderer = mode === "canvas2d"
+        ? new Canvas2DRenderer(canvas)
+        : new WebGLRenderer(canvas)
+    } catch {
+      renderer = new Canvas2DRenderer(canvas)
+    }
+
+    // Initial size + ResizeObserver
+    const handleResize = () => {
+      renderer.resize(canvas.offsetWidth, canvas.offsetHeight)
+      setCanvasSize({ w: canvas.offsetWidth, h: canvas.offsetHeight })
+    }
+    handleResize()
+    const observer = new ResizeObserver(handleResize)
+    observer.observe(canvas)
+
+    // Start rAF loop
     const t0 = performance.now() / 1000
     startTimeRef.current = t0
     lastTimeRef.current = t0
@@ -113,7 +145,7 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
         hook({ buf, time, dt })
       }
 
-      // Advance age and auto-kill expired particles per group
+      // Advance age and auto-kill expired particles
       for (const [, group] of groupsRef.current) {
         for (let i = group.start; i < group.end; i++) {
           const b = i * STRIDE
@@ -129,27 +161,18 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
         }
       }
 
-      // renderer.draw() called here in Stage 3+
-
+      renderer.draw(buf, renderConfig)
       rafRef.current = requestAnimationFrame(tick)
     }
 
     rafRef.current = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(rafRef.current)
-  }, [])
 
-  // -------------------------------------------------------------------------
-  // Track canvas size
-  // -------------------------------------------------------------------------
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const observer = new ResizeObserver(() => {
-      setCanvasSize({ w: canvas.offsetWidth, h: canvas.offsetHeight })
-    })
-    observer.observe(canvas)
-    setCanvasSize({ w: canvas.offsetWidth, h: canvas.offsetHeight })
-    return () => observer.disconnect()
+    return () => {
+      cancelAnimationFrame(rafRef.current)
+      observer.disconnect()
+      renderer.destroy()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // -------------------------------------------------------------------------
