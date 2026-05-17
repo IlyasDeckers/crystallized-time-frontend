@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef } from "react"
 import type { MidiMessage } from "@/hooks/use-midi"
 import type { UseOscResult } from "@/hooks/use-osc"
-import type { UseParticlesResult, FrameHook, Particle } from "@/hooks/use-particles"
+import type { UseParticlesResult, FrameHook } from "@/particles/engine"
+import { STRIDE, F } from "@/particles/buffer"
 import { useParticleAnimator } from "@/hooks/use-particle-animator"
 import { useParticlePulse } from "@/hooks/use-particle-pulse"
 import { SHAPES, type ShapeName } from "@/hooks/particle-shapes"
@@ -13,7 +14,6 @@ import { type UseShapes3DResult, type Shape3DName, SHAPE_3D_NAMES } from "@/hook
 
 export interface ParticleEffectsConfig {
   noteShapeMap?: Record<number, ShapeName>
-  /** Map note numbers to 3D shape names. */
   noteShape3DMap?: Record<number, Shape3DName>
   /** Channels (0-indexed) that trigger particle spawn. Empty = all, null = disabled. */
   spawnChannels?: number[] | null
@@ -21,15 +21,11 @@ export interface ParticleEffectsConfig {
   pulseChannels?: number[] | null
   speedCC?: number
   speedRange?: [number, number]
-  /** Channels (0-indexed) that respond to speedCC. Empty = all, null = disabled. */
   speedChannels?: number[] | null
   linkDistanceCC?: number
   linkDistanceRange?: [number, number]
-  /** Channels (0-indexed) that respond to linkDistanceCC. Empty = all, null = disabled. */
   linkDistanceChannels?: number[] | null
-  /** CC number that sets rotation speed Y axis (0..127 → 0..2 rad/s). Default 1 (mod wheel). */
   rotationSpeedCC?: number
-  /** Channels (0-indexed) that respond to rotationSpeedCC. Empty = all, null = disabled. */
   rotationSpeedChannels?: number[] | null
   oscPulseAddress?: string
   oscShapeAddress?: string
@@ -42,18 +38,10 @@ export interface ParticleEffectsConfig {
   fadeOutDuration?: number
 }
 
-interface ManagedParticle extends Particle {
-  _spawnTime?: number
-  _lifetime?: number
-  _baseOpacity?: number
-  _idx?: number
-}
-
 function velocityToSpeed(midiVel: number, min = 0.3, max = 2.5): number {
   return min + (midiVel / 127) * (max - min)
 }
 
-// Stable defaults to avoid recreating arrays on every render
 const EMPTY_CHANNELS: number[] = []
 const DEFAULT_PULSE_CHANNELS: number[] = [15]
 const DEFAULT_NOTE_SHAPE_3D_MAP: Record<number, Shape3DName> = {
@@ -115,32 +103,43 @@ export function useParticleEffects(
   }, [particlesApi?.ready, particlesApi?.canvasSize])
 
   // -------------------------------------------------------------------------
-  // Lifetime frame hook
+  // Group setup for spawned particles
   // -------------------------------------------------------------------------
-  const lifetimeHook = useCallback<FrameHook>(({ particles, time }) => {
-    for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i] as ManagedParticle
-      if (p._spawnTime === undefined) continue
-      const age = time - p._spawnTime
-      const life = p._lifetime ?? particleLifetime
-      if (age >= life) {
-        particles.splice(i, 1)
-        for (let j = i; j < particles.length; j++) {
-          (particles[j] as ManagedParticle)._idx = j
-        }
-        continue
-      }
-      const remaining = life - age
-      p.opacity = remaining < fadeOutDuration
-        ? (p._baseOpacity ?? 0.7) * (remaining / fadeOutDuration)
-        : (p._baseOpacity ?? 0.7)
+  useEffect(() => {
+    const api = particlesApiRef.current
+    if (!api?.ready) return
+    try {
+      api.groups.addGroup("spawned", { maxParticles })
+    } catch {
+      // group may already exist on hot-reload
     }
-  }, [particleLifetime, fadeOutDuration])
+    return () => {
+      particlesApiRef.current?.groups.removeGroup("spawned")
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [particlesApi?.ready, maxParticles])
+
+  // -------------------------------------------------------------------------
+  // Fade-out hook — lerps opacity to 0 as particles near end of life
+  // -------------------------------------------------------------------------
+  const fadeHook = useCallback<FrameHook>(({ buf }) => {
+    for (let i = 0; i < buf.capacity; i++) {
+      const b = i * STRIDE
+      const age = buf.data[b + F.AGE]
+      const lifetime = buf.data[b + F.LIFETIME]
+      if (age < lifetime && lifetime !== Infinity) {
+        const remaining = lifetime - age
+        if (remaining < fadeOutDuration) {
+          buf.data[b + F.OPACITY] = 0.7 * (remaining / fadeOutDuration)
+        }
+      }
+    }
+  }, [fadeOutDuration])
 
   useEffect(() => {
     if (!particlesApi?.ready) return
-    return particlesApi.addFrameHook(lifetimeHook)
-  }, [particlesApi?.ready, particlesApi, lifetimeHook])
+    return particlesApi.addFrameHook(fadeHook)
+  }, [particlesApi?.ready, particlesApi, fadeHook])
 
   // Time ref kept in sync by a lightweight hook
   const timeRef = useRef(0)
@@ -153,37 +152,35 @@ export function useParticleEffects(
   // -------------------------------------------------------------------------
   // Spawn particle
   // -------------------------------------------------------------------------
-  const spawnParticle = useCallback((midiVelocity: number, time: number) => {
+  const spawnParticle = useCallback((midiVelocity: number) => {
     const api = particlesApiRef.current
     if (!api?.ready) return
-    if (api.particles.length >= maxParticles) {
-      const arr = api.particles as ManagedParticle[]
-      let oldestIdx = -1, oldestSpawn = Infinity
-      for (let i = 0; i < arr.length; i++) {
-        const t = arr[i]._spawnTime
-        if (t !== undefined && t < oldestSpawn) { oldestSpawn = t; oldestIdx = i }
-      }
-      if (oldestIdx >= 0) arr.splice(oldestIdx, 1)
-      else return
-    }
     const vp = canvasSizeRef.current
     const x = vp.w * 0.05 + Math.random() * vp.w * 0.9
     const y = vp.h * 0.05 + Math.random() * vp.h * 0.9
-    const before = api.particles.length
-    api.burst(1, x, y)
-    const arr = api.particles as ManagedParticle[]
-    if (arr.length > before) {
-      const p = arr[arr.length - 1]
-      const speed = velocityToSpeed(midiVelocity)
-      const angle = Math.random() * Math.PI * 2
-      p.vx = Math.cos(angle) * speed
-      p.vy = Math.sin(angle) * speed
-      p._spawnTime = time
-      p._lifetime = particleLifetime
-      p._baseOpacity = p.opacity
-      p._idx = arr.length - 1
+    api.burst({
+      group: "spawned",
+      count: 1,
+      x, y,
+      speed: velocityToSpeed(midiVelocity),
+      opacity: 0.7,
+      size: 2.5,
+      lifetime: particleLifetime,
+    })
+  }, [particleLifetime])
+
+  // -------------------------------------------------------------------------
+  // Count alive particles (used for shape target generation)
+  // -------------------------------------------------------------------------
+  function countAlive(api: UseParticlesResult): number {
+    let n = 0
+    const { buf } = api
+    for (let i = 0; i < buf.capacity; i++) {
+      const b = i * STRIDE
+      if (buf.data[b + F.AGE] < buf.data[b + F.LIFETIME]) n++
     }
-  }, [maxParticles, particleLifetime])
+    return n
+  }
 
   // -------------------------------------------------------------------------
   // applyShape (2D)
@@ -193,8 +190,9 @@ export function useParticleEffects(
     if (!api?.ready) return
     const provider = SHAPES[name]
     if (!provider) return
+    const count = countAlive(api)
     const targets = provider({
-      count: api.particles.length,
+      count,
       viewport: canvasSizeRef.current,
       time,
     })
@@ -202,19 +200,20 @@ export function useParticleEffects(
   }, [])
 
   // -------------------------------------------------------------------------
-  // applyShape3D — generates targets from the live 3D projection
+  // applyShape3D
   // -------------------------------------------------------------------------
   const applyShape3D = useCallback((name: Shape3DName) => {
     const api = particlesApiRef.current
     const s3d = shapes3dRef.current
     if (!api?.ready || !s3d) return
+    const count = countAlive(api)
     const provider = s3d.getProvider(name)
     const targets = provider({
-      count: api.particles.length,
+      count,
       viewport: canvasSizeRef.current,
       time: timeRef.current,
     })
-    console.log("[particles] applyShape3D", name, "→", targets.length, "targets")
+    console.log("[particles] applyShape3D", name, "->", targets.length, "targets")
     animatorRef.current.setTargets(targets)
   }, [])
 
@@ -227,7 +226,7 @@ export function useParticleEffects(
 
     if (msg.type === "noteOn") {
       const inSpawn = spawnChannels !== null && (spawnChannels.length === 0 || spawnChannels.includes(msg.channel))
-      if (inSpawn) spawnParticle(msg.data2, timeRef.current)
+      if (inSpawn) spawnParticle(msg.data2)
 
       const inPulse = pulseChannels !== null && (pulseChannels.length === 0 || pulseChannels.includes(msg.channel))
       if (inPulse) {
@@ -235,7 +234,6 @@ export function useParticleEffects(
         return
       }
 
-      // 3D shape trigger
       const shape3DName = noteShape3DMap[msg.data1]
       if (shape3DName) {
         applyShape3D(shape3DName)
@@ -247,14 +245,12 @@ export function useParticleEffects(
         return
       }
 
-      // 2D shape trigger
       const shapeName = noteShapeMap[msg.data1]
       if (shapeName) {
         applyShape(shapeName)
         return
       }
 
-      // Everything else: dim pulse
       pulseRef.current.fire(-1, (msg.data2 / 127) * 0.4)
       return
     }
@@ -270,12 +266,25 @@ export function useParticleEffects(
       const t = msg.data2 / 127
       const inSpeedCh = speedChannels !== null && (speedChannels.length === 0 || speedChannels.includes(msg.channel))
       if (msg.data1 === speedCC && inSpeedCh) {
-        api.setConfig({ speed: speedRange[0] + t * (speedRange[1] - speedRange[0]) })
+        const targetSpeed = speedRange[0] + t * (speedRange[1] - speedRange[0])
+        const buf = api.buf
+        for (let i = 0; i < buf.capacity; i++) {
+          const b = i * STRIDE
+          if (buf.data[b + F.AGE] < buf.data[b + F.LIFETIME]) {
+            const vx = buf.data[b + F.VX]
+            const vy = buf.data[b + F.VY]
+            const spd = Math.sqrt(vx * vx + vy * vy)
+            if (spd > 0.001) {
+              buf.data[b + F.VX] = (vx / spd) * targetSpeed
+              buf.data[b + F.VY] = (vy / spd) * targetSpeed
+            }
+          }
+        }
       }
       const inLinkCh = linkDistanceChannels !== null && (linkDistanceChannels.length === 0 || linkDistanceChannels.includes(msg.channel))
       if (msg.data1 === linkDistanceCC && inLinkCh) {
-        api.setConfig({
-          linkedDistance: linkDistanceRange[0] + t * (linkDistanceRange[1] - linkDistanceRange[0]),
+        api.setRenderConfig({
+          linkDistance: linkDistanceRange[0] + t * (linkDistanceRange[1] - linkDistanceRange[0]),
         })
       }
       const inRotCh = rotationSpeedChannels !== null && (rotationSpeedChannels.length === 0 || rotationSpeedChannels.includes(msg.channel))

@@ -10,9 +10,20 @@ import { useOsc } from '@/hooks/use-osc'
 import { useShapes3D, SHAPE_3D_NAMES, type Shape3DName } from '@/hooks/use-shapes3d'
 import { useParticleEffects } from '@/hooks/use-particle-effects'
 import { SHAPES, type ShapeName } from '@/hooks/particle-shapes'
-import type { UseParticlesResult } from '@/hooks/use-particles'
+import type { UseParticlesResult } from '@/particles/engine'
+import { STRIDE, F } from '@/particles/buffer'
 
 const OSC_LOG_VISIBLE = 8
+
+function countAlive(api: UseParticlesResult): number {
+  let n = 0
+  const { buf } = api
+  for (let i = 0; i < buf.capacity; i++) {
+    const b = i * STRIDE
+    if (buf.data[b + F.AGE] < buf.data[b + F.LIFETIME]) n++
+  }
+  return n
+}
 
 function App() {
   const [debugOpen, setDebugOpen] = useState(true)
@@ -28,12 +39,12 @@ function App() {
   const [particlesApi, setParticlesApi] = useState<UseParticlesResult | null>(null)
 
   // -------------------------------------------------------------------------
-  // 3D shapes — lives here so App can also call impulse/setRotationSpeed
+  // 3D shapes
   // -------------------------------------------------------------------------
   const shapes3d = useShapes3D(particlesApi, {
     scale: 0.5,
-    focalLength: 600,   // higher = less perspective distortion, more orthographic
-    depth: 0.5,           // lower = more dramatic perspective
+    focalLength: 600,
+    depth: 0.5,
     rotationSpeed: [0.15, 0.28, 0.06],
     autoRotate: true,
   })
@@ -87,14 +98,11 @@ function App() {
       <main className="flex-1 relative overflow-hidden min-h-0">
 
         <ParticlesStage
-          id="particles-stage"
+          initialCount={20}
+          initialSpeed={1.5}
           config={{
-            count: 20,
-            speed: 1.5,
-            linkedDistance: 130,
-            linkedOpacity: 0.35,
-            size: 2.5,
-            color: '#ffffff',
+            maxParticles: 4096,
+            renderConfig: { linkDistance: 130, linkOpacity: 0.35 },
           }}
           onReady={setParticlesApi}
         />
@@ -158,7 +166,7 @@ function App() {
               <div className="text-muted-foreground">particles</div>
               <div className="text-foreground">
                 {particlesApi?.ready
-                  ? `${particlesApi.particles.length} / 400`
+                  ? `${countAlive(particlesApi)} / ${particlesApi.buf.capacity}`
                   : 'loading…'}
               </div>
             </div>

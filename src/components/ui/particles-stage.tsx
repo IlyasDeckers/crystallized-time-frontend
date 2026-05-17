@@ -1,20 +1,18 @@
-import {useEffect, useRef} from "react"
-import {cn} from "@/lib/utils"
-import {useParticles, type ParticlesConfig, type UseParticlesResult} from "../../hooks/use-particles"
+import { useEffect, useRef } from "react"
+import { cn } from "@/lib/utils"
+import { useParticles, type EngineConfig, type UseParticlesResult } from "@/particles/engine"
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export interface ParticlesStageProps {
-  /** Must be stable across renders — used as the particles.js DOM id. */
-  id?: string
-  config?: ParticlesConfig
+  config?: EngineConfig
+  /** Number of immortal ambient particles to spawn on mount. */
+  initialCount?: number
+  /** Speed for initial ambient particles. */
+  initialSpeed?: number
   className?: string
-  /**
-   * Callback fired once particles.js is ready and the hook result is
-   * available. Wire your MIDI/OSC effects here.
-   */
   onReady?: (particles: UseParticlesResult) => void
 }
 
@@ -23,26 +21,54 @@ export interface ParticlesStageProps {
 // ---------------------------------------------------------------------------
 
 export function ParticlesStage({
-                                 id = "particles-stage",
-                                 config,
-                                 className,
-                                 onReady,
-                               }: ParticlesStageProps) {
-  const particles = useParticles(id, config)
+  config = {},
+  initialCount = 0,
+  initialSpeed = 1.5,
+  className,
+  onReady,
+}: ParticlesStageProps) {
+  const particles = useParticles(config)
   const onReadyRef = useRef(onReady)
+  const ambientSetupDoneRef = useRef(false)
+
   useEffect(() => {
     onReadyRef.current = onReady
   }, [onReady])
 
   useEffect(() => {
-    if (particles.ready) {
-      onReadyRef.current?.(particles)
+    if (!particles.ready || ambientSetupDoneRef.current) return
+    ambientSetupDoneRef.current = true
+
+    if (initialCount > 0) {
+      try {
+        particles.groups.addGroup("ambient", { maxParticles: initialCount })
+      } catch { /* already exists on hot-reload */ }
+
+      const w = particles.canvasSize.w || window.innerWidth
+      const h = particles.canvasSize.h || window.innerHeight
+      for (let i = 0; i < initialCount; i++) {
+        particles.burst({
+          group: "ambient",
+          count: 1,
+          x: Math.random() * w,
+          y: Math.random() * h,
+          speed: initialSpeed,
+          r: 1, g: 1, b: 1,
+          opacity: 0.7,
+          size: 2.5,
+        })
+      }
     }
-    // We only want this to fire once when ready flips to true
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    onReadyRef.current?.(particles)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [particles.ready])
 
   return (
-    <div id={id} className={cn("absolute inset-0", className)} style={{background: "transparent"}}/>
+    <canvas
+      ref={particles.canvasRef}
+      className={cn("absolute inset-0 w-full h-full", className)}
+      style={{ display: "block" }}
+    />
   )
 }

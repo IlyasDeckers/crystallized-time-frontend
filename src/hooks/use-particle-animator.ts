@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react"
-import type { FrameHook, UseParticlesResult } from "@/hooks/use-particles"
+import type { FrameHook, UseParticlesResult } from "@/particles/engine"
+import { STRIDE, F } from "@/particles/buffer"
 
 export interface Point {
   x: number
@@ -29,84 +30,108 @@ export function useParticleAnimator(
   } = config
 
   const targetsRef = useRef<Point[] | null>(null)
-  const savedVelocitiesRef = useRef<Map<number, { vx: number; vy: number }>>(new Map())
+  const savedVxRef = useRef<Float32Array>(new Float32Array(0))
+  const savedVyRef = useRef<Float32Array>(new Float32Array(0))
+  const hasSavedRef = useRef<Uint8Array>(new Uint8Array(0))
   const isAnimatingRef = useRef(false)
+  const particlesApiRef = useRef(particlesApi)
+  useEffect(() => { particlesApiRef.current = particlesApi }, [particlesApi])
 
-  const frameHook = useCallback<FrameHook>(({ particles, dt }) => {
+  const frameHook = useCallback<FrameHook>(({ buf, dt }) => {
     const targets = targetsRef.current
     if (!targets || targets.length === 0) return
 
+    const capacity = buf.capacity
+
+    if (savedVxRef.current.length !== capacity) {
+      savedVxRef.current = new Float32Array(capacity)
+      savedVyRef.current = new Float32Array(capacity)
+      hasSavedRef.current = new Uint8Array(capacity)
+    }
+
     let anyMoving = false
+    let aliveIdx = 0
 
-    for (let i = 0; i < particles.length; i++) {
-      const p = particles[i]
-      const target = targets[i % targets.length]
+    for (let i = 0; i < capacity; i++) {
+      const b = i * STRIDE
+      if (buf.data[b + F.AGE] >= buf.data[b + F.LIFETIME]) continue
 
-      if (!savedVelocitiesRef.current.has(i)) {
-        savedVelocitiesRef.current.set(i, {
-          vx: p.vx as number,
-          vy: p.vy as number,
-        })
+      const target = targets[aliveIdx % targets.length]
+      aliveIdx++
+
+      if (!hasSavedRef.current[i]) {
+        savedVxRef.current[i] = buf.data[b + F.VX]
+        savedVyRef.current[i] = buf.data[b + F.VY]
+        hasSavedRef.current[i] = 1
       }
 
-      const dx = target.x - p.x
-      const dy = target.y - p.y
+      const dx = target.x - buf.data[b + F.X]
+      const dy = target.y - buf.data[b + F.Y]
       const dist = Math.sqrt(dx * dx + dy * dy)
 
       if (dist > arrivalThreshold) {
         anyMoving = true
         const factor = 1 - Math.exp(-lerpSpeed * dt)
-        p.x += dx * factor
-        p.y += dy * factor
-        p.vx = 0
-        p.vy = 0
+        buf.data[b + F.X] += dx * factor
+        buf.data[b + F.Y] += dy * factor
+        buf.data[b + F.VX] = 0
+        buf.data[b + F.VY] = 0
       } else {
-        p.x = target.x
-        p.y = target.y
-        p.vx = 0
-        p.vy = 0
+        buf.data[b + F.X] = target.x
+        buf.data[b + F.Y] = target.y
+        buf.data[b + F.VX] = 0
+        buf.data[b + F.VY] = 0
       }
     }
 
     isAnimatingRef.current = anyMoving
   }, [lerpSpeed, arrivalThreshold])
 
-  // Register the frame hook eagerly as soon as particlesApi is ready
   useEffect(() => {
     if (!particlesApi?.ready) return
-    const cleanup = particlesApi.addFrameHook(frameHook)
-    return cleanup
+    return particlesApi.addFrameHook(frameHook)
   }, [particlesApi?.ready, particlesApi, frameHook])
 
   const setTargets = useCallback((targets: Point[] | null) => {
     targetsRef.current = targets
 
     if (targets === null || targets.length === 0) {
-      if (restoreVelocityOnRelease && particlesApi?.particles) {
-        for (let i = 0; i < particlesApi.particles.length; i++) {
-          const saved = savedVelocitiesRef.current.get(i)
-          if (saved) {
-            particlesApi.particles[i].vx = saved.vx
-            particlesApi.particles[i].vy = saved.vy
+      const buf = particlesApiRef.current?.buf
+      if (restoreVelocityOnRelease && buf) {
+        const capacity = buf.capacity
+        for (let i = 0; i < capacity; i++) {
+          if (!hasSavedRef.current[i]) continue
+          const b = i * STRIDE
+          if (buf.data[b + F.AGE] < buf.data[b + F.LIFETIME]) {
+            buf.data[b + F.VX] = savedVxRef.current[i]
+            buf.data[b + F.VY] = savedVyRef.current[i]
           }
         }
       }
-      savedVelocitiesRef.current.clear()
+      savedVxRef.current.fill(0)
+      savedVyRef.current.fill(0)
+      hasSavedRef.current.fill(0)
       isAnimatingRef.current = false
     }
-  }, [particlesApi, restoreVelocityOnRelease])
+  }, [restoreVelocityOnRelease])
 
   const scatter = useCallback((strength = 5) => {
-    if (!particlesApi?.particles) return
+    const buf = particlesApiRef.current?.buf
+    if (!buf) return
     targetsRef.current = null
-    savedVelocitiesRef.current.clear()
+    savedVxRef.current.fill(0)
+    savedVyRef.current.fill(0)
+    hasSavedRef.current.fill(0)
 
-    for (const p of particlesApi.particles) {
-      const angle = Math.random() * Math.PI * 2
-      p.vx = Math.cos(angle) * strength * (0.5 + Math.random())
-      p.vy = Math.sin(angle) * strength * (0.5 + Math.random())
+    for (let i = 0; i < buf.capacity; i++) {
+      const b = i * STRIDE
+      if (buf.data[b + F.AGE] < buf.data[b + F.LIFETIME]) {
+        const angle = Math.random() * Math.PI * 2
+        buf.data[b + F.VX] = Math.cos(angle) * strength * (0.5 + Math.random())
+        buf.data[b + F.VY] = Math.sin(angle) * strength * (0.5 + Math.random())
+      }
     }
-  }, [particlesApi])
+  }, [])
 
   return {
     setTargets,

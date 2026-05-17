@@ -61,6 +61,7 @@ export interface UseParticlesResult {
     setGroupShape: (name: string, shape: string) => void
   }
   burst: (options: BurstOptions) => void
+  setRenderConfig: (patch: Partial<RenderConfig>) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +95,8 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
   const dtCapRef = useRef(dtCap)
   dtCapRef.current = dtCap
 
+  const renderConfigLiveRef = useRef<RenderConfig>({ ...DEFAULT_RENDER_CONFIG, ...config.renderConfig })
+
   const [ready, setReady] = useState(false)
   const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 })
 
@@ -104,9 +107,6 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-
-    // Build render config from defaults + caller overrides
-    const renderConfig: RenderConfig = { ...DEFAULT_RENDER_CONFIG, ...config.renderConfig }
 
     // Create renderer — WebGL2 preferred, Canvas2D as fallback
     let renderer: Renderer
@@ -161,7 +161,7 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
         }
       }
 
-      renderer.draw(buf, renderConfig)
+      renderer.draw(buf, renderConfigLiveRef.current)
       rafRef.current = requestAnimationFrame(tick)
     }
 
@@ -238,6 +238,10 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
   // -------------------------------------------------------------------------
   // Burst — spawn N particles into a named group
   // -------------------------------------------------------------------------
+  const setRenderConfig = useCallback((patch: Partial<RenderConfig>) => {
+    Object.assign(renderConfigLiveRef.current, patch)
+  }, [])
+
   const burst = useCallback((options: BurstOptions) => {
     const group = groupsRef.current.get(options.group)
     if (!group) return
@@ -272,5 +276,6 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
     addFrameHook,
     groups: { addGroup, removeGroup, setGroupShape },
     burst,
+    setRenderConfig,
   }
 }

@@ -1,83 +1,54 @@
 import { useCallback, useEffect, useRef } from "react"
-import type { FrameHook, Particle, PJSInstance, UseParticlesResult } from "@/hooks/use-particles"
+import type { FrameHook, UseParticlesResult } from "@/particles/engine"
+import { STRIDE, F, type ParticleBuffer } from "@/particles/buffer"
 
 export interface PulseConfig {
   decay?: number
   propagationSpeed?: number
   minCharge?: number
-  /** Color at full charge [r, g, b]. Default white. */
+  /** Color at full charge [r, g, b] 0..255. Default white. */
   pulseColor?: [number, number, number]
-  /** Color at zero charge [r, g, b]. Default dim grey. */
+  /** Color at zero charge [r, g, b] 0..255. Default dim grey. */
   baseColor?: [number, number, number]
-  /**
-   * Multiplier applied to pulseColor for bright pulses (e.g. ch 16).
-   * Values > 1 push toward pure white. Default 1.
-   * Pass values like 1.5–2.0 for the bright channel.
-   */
+  /** Multiplier applied to pulseColor for bright pulses. Default 2. */
   brightMultiplier?: number
   graphRebuildInterval?: number
+  /** Distance threshold for neighbor links. Should match renderConfig.linkDistance. */
+  linkDistance?: number
 }
 
 export interface UseParticlePulseResult {
-  /** Fire a pulse at a specific particle index. Pass -1 for random. */
+  /** Fire a pulse at a specific alive-particle index (-1 = random). */
   fire: (particleIndex?: number, charge?: number, bright?: boolean) => void
   /** Fire pulses at N random particles. */
   fireRandom: (count?: number, charge?: number, bright?: boolean) => void
 }
 
-function lerpColor(
-  base: [number, number, number],
-  pulse: [number, number, number],
-  t: number,
-  brightMultiplier = 1,
-): { r: number; g: number; b: number } {
-  const m = brightMultiplier
-  return {
-    r: Math.min(255, Math.round((base[0] + (pulse[0] - base[0]) * t) * m)),
-    g: Math.min(255, Math.round((base[1] + (pulse[1] - base[1]) * t) * m)),
-    b: Math.min(255, Math.round((base[2] + (pulse[2] - base[2]) * t) * m)),
+function buildNeighborGraph(
+  buf: ParticleBuffer,
+  alive: number[],
+  linkDist: number,
+): Map<number, number[]> {
+  const neighbours = new Map<number, number[]>()
+  for (const i of alive) neighbours.set(i, [])
+  const d2max = linkDist * linkDist
+  for (let ai = 0; ai < alive.length; ai++) {
+    const i = alive[ai]
+    const bi = i * STRIDE
+    const xi = buf.data[bi + F.X]
+    const yi = buf.data[bi + F.Y]
+    for (let aj = ai + 1; aj < alive.length; aj++) {
+      const j = alive[aj]
+      const bj = j * STRIDE
+      const dx = xi - buf.data[bj + F.X]
+      const dy = yi - buf.data[bj + F.Y]
+      if (dx * dx + dy * dy <= d2max) {
+        neighbours.get(i)!.push(j)
+        neighbours.get(j)!.push(i)
+      }
+    }
   }
-}
-
-const patchedInstances = new WeakSet<PJSInstance>()
-
-function patchLinkParticles(
-  pjs: PJSInstance,
-  getCharge: (i: number, j: number) => { charge: number; bright: boolean },
-  baseColor: [number, number, number],
-  pulseColor: [number, number, number],
-  minCharge: number,
-  brightMultiplier: number,
-) {
-  if (patchedInstances.has(pjs)) return
-  patchedInstances.add(pjs)
-
-  const array = pjs.particles.array
-  for (let i = 0; i < array.length; i++) {
-    (array[i] as Particle & { _idx: number })._idx = i
-  }
-
-  const original = (pjs.fn.interact as Record<string, unknown>)["linkParticles"] as (
-    p1: Particle,
-    p2: Particle,
-  ) => void
-  if (!original) return
-
-    ;(pjs.fn.interact as Record<string, unknown>)["linkParticles"] = function (
-    p1: Particle & { _idx?: number },
-    p2: Particle & { _idx?: number },
-  ) {
-    const i = p1._idx ?? 0
-    const j = p2._idx ?? 0
-    const { charge, bright } = getCharge(i, j)
-
-    pjs.particles.line_linked.color_rgb_line =
-      charge > minCharge
-        ? lerpColor(baseColor, pulseColor, Math.min(charge, 1), bright ? brightMultiplier : 1)
-        : { r: baseColor[0], g: baseColor[1], b: baseColor[2] }
-
-    original.call(pjs.fn.interact, p1, p2)
-  }
+  return neighbours
 }
 
 export function useParticlePulse(
@@ -92,89 +63,61 @@ export function useParticlePulse(
     baseColor = [80, 80, 80],
     brightMultiplier = 2.0,
     graphRebuildInterval = 30,
+    linkDistance = 130,
   } = config
 
+  // Normalize colors to 0..1 once
+  const pulseR = pulseColor[0] / 255
+  const pulseG = pulseColor[1] / 255
+  const pulseB = pulseColor[2] / 255
+  const baseR = baseColor[0] / 255
+  const baseG = baseColor[1] / 255
+  const baseB = baseColor[2] / 255
+
   const chargesRef = useRef<Float32Array>(new Float32Array(0))
-  // Track whether each particle's charge came from a bright source
-  const brightRef = useRef<Uint8Array>(new Uint8Array(0))
-  const neighboursRef = useRef<number[][]>([])
+  const brightFlagRef = useRef<Uint8Array>(new Uint8Array(0))
+  const neighboursRef = useRef<Map<number, number[]>>(new Map())
   const frameCountRef = useRef(0)
-  const patchedRef = useRef(false)
+  const particlesApiRef = useRef(particlesApi)
+  useEffect(() => { particlesApiRef.current = particlesApi }, [particlesApi])
 
-  const getCharge = useCallback((i: number, j: number) => {
-    const ci = chargesRef.current[i] ?? 0
-    const cj = chargesRef.current[j] ?? 0
-    const charge = Math.max(ci, cj)
-    const bright = !!(brightRef.current[i] || brightRef.current[j])
-    return { charge, bright }
-  }, [])
+  const frameHook = useCallback<FrameHook>(({ buf, dt }) => {
+    const capacity = buf.capacity
 
-  const rebuildGraph = useCallback((particles: Particle[], dist: number) => {
-    const n = particles.length
-    const neighbours: number[][] = Array.from({ length: n }, () => [])
-    const dist2 = dist * dist
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        const dx = particles[i].x - particles[j].x
-        const dy = particles[i].y - particles[j].y
-        if (dx * dx + dy * dy <= dist2) {
-          neighbours[i].push(j)
-          neighbours[j].push(i)
-        }
-      }
-    }
-    neighboursRef.current = neighbours
-  }, [])
-
-  const frameHook = useCallback<FrameHook>(({ particles, pjs, dt }) => {
-    const n = particles.length
-    if (n === 0) return
-
-    // Resize buffers if particle count changed
-    if (chargesRef.current.length !== n) {
-      const newCharges = new Float32Array(n)
-      newCharges.set(chargesRef.current.subarray(0, Math.min(n, chargesRef.current.length)))
-      chargesRef.current = newCharges
-
-      const newBright = new Uint8Array(n)
-      newBright.set(brightRef.current.subarray(0, Math.min(n, brightRef.current.length)))
-      brightRef.current = newBright
+    if (chargesRef.current.length !== capacity) {
+      chargesRef.current = new Float32Array(capacity)
+      brightFlagRef.current = new Uint8Array(capacity)
     }
 
-    // Stamp indices
-    for (let i = 0; i < n; i++) {
-      (particles[i] as Particle & { _idx: number })._idx = i
+    // Collect alive indices
+    const alive: number[] = []
+    for (let i = 0; i < capacity; i++) {
+      const b = i * STRIDE
+      if (buf.data[b + F.AGE] < buf.data[b + F.LIFETIME]) alive.push(i)
     }
-
-    if (!patchedRef.current) {
-      patchedRef.current = true
-      patchLinkParticles(pjs, getCharge, baseColor, pulseColor, minCharge, brightMultiplier)
-    }
+    if (alive.length === 0) return
 
     frameCountRef.current++
     if (
       frameCountRef.current % graphRebuildInterval === 0 ||
-      neighboursRef.current.length !== n
+      neighboursRef.current.size !== alive.length
     ) {
-      rebuildGraph(particles, pjs.particles.line_linked.distance)
+      neighboursRef.current = buildNeighborGraph(buf, alive, linkDistance)
     }
 
     const charges = chargesRef.current
-    const brights = brightRef.current
-    const neighbours = neighboursRef.current
-    const nextCharges = new Float32Array(n)
-    const nextBright = new Uint8Array(n)
+    const brights = brightFlagRef.current
+    const nextCharges = new Float32Array(capacity)
+    const nextBright = new Uint8Array(capacity)
 
-    for (let i = 0; i < n; i++) {
+    for (const i of alive) {
       const c = charges[i]
       if (c < minCharge) continue
-
-      const nbrs = neighbours[i]
+      const nbrs = neighboursRef.current.get(i)
       if (nbrs) {
         for (const j of nbrs) {
           const transfer = c * propagationSpeed * dt
           nextCharges[j] = Math.min(1, nextCharges[j] + transfer)
-          // Propagate bright flag alongside charge
           if (brights[i]) nextBright[j] = 1
         }
       }
@@ -183,8 +126,20 @@ export function useParticlePulse(
     }
 
     chargesRef.current = nextCharges
-    brightRef.current = nextBright
-  }, [decay, propagationSpeed, minCharge, graphRebuildInterval, rebuildGraph, getCharge, baseColor, pulseColor, brightMultiplier])
+    brightFlagRef.current = nextBright
+
+    // Write color + charge into buffer
+    for (const i of alive) {
+      const b = i * STRIDE
+      const c = nextCharges[i]
+      buf.data[b + F.CHARGE] = c
+      const m = nextBright[i] ? brightMultiplier : 1
+      buf.data[b + F.R] = Math.min(1, (baseR + (pulseR - baseR) * c) * m)
+      buf.data[b + F.G] = Math.min(1, (baseG + (pulseG - baseG) * c) * m)
+      buf.data[b + F.B] = Math.min(1, (baseB + (pulseB - baseB) * c) * m)
+    }
+  }, [decay, propagationSpeed, minCharge, graphRebuildInterval, linkDistance,
+    brightMultiplier, pulseR, pulseG, pulseB, baseR, baseG, baseB])
 
   useEffect(() => {
     if (!particlesApi?.ready) return
@@ -192,16 +147,30 @@ export function useParticlePulse(
   }, [particlesApi?.ready, particlesApi, frameHook])
 
   const fire = useCallback((particleIndex = -1, charge = 1.0, bright = false) => {
-    const n = particlesApi?.particles.length ?? 0
-    if (n === 0) return
-    if (chargesRef.current.length !== n) {
-      chargesRef.current = new Float32Array(n)
-      brightRef.current = new Uint8Array(n)
+    const buf = particlesApiRef.current?.buf
+    if (!buf) return
+    const capacity = buf.capacity
+
+    if (chargesRef.current.length !== capacity) {
+      chargesRef.current = new Float32Array(capacity)
+      brightFlagRef.current = new Uint8Array(capacity)
     }
-    const idx = particleIndex < 0 ? Math.floor(Math.random() * n) : particleIndex % n
-    chargesRef.current[idx] = Math.min(1, chargesRef.current[idx] + charge)
-    if (bright) brightRef.current[idx] = 1
-  }, [particlesApi])
+
+    // Collect alive indices
+    const alive: number[] = []
+    for (let i = 0; i < capacity; i++) {
+      const b = i * STRIDE
+      if (buf.data[b + F.AGE] < buf.data[b + F.LIFETIME]) alive.push(i)
+    }
+    if (alive.length === 0) return
+
+    const slot = particleIndex < 0
+      ? alive[Math.floor(Math.random() * alive.length)]
+      : alive[particleIndex % alive.length]
+
+    chargesRef.current[slot] = Math.min(1, chargesRef.current[slot] + charge)
+    if (bright) brightFlagRef.current[slot] = 1
+  }, [])
 
   const fireRandom = useCallback((count = 1, charge = 1.0, bright = false) => {
     for (let i = 0; i < count; i++) fire(-1, charge, bright)
