@@ -10,8 +10,9 @@ import { SHAPES, type ShapeName } from "@/hooks/particle-shapes"
 import { SHAPE_3D_NAMES } from "@/hooks/use-shapes3d"
 import { MidiRouter } from "./router"
 import type { MidiAction, MidiRoute } from "./router"
-import { applyCC } from "./cc-registry"
+import { applyCC, lookupCC } from "./cc-registry"
 import type { MidiSettings } from "@/components/ui/midi-settings-card"
+import { paramStore, isParamKey } from "@/particles/param-store"
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -35,7 +36,7 @@ export function buildRoutes(settings: MidiSettings): MidiRoute[] {
       msgType: "cc",
       ccNumber: settings.speedCC,
       ...(settings.speedChannels.length > 0 && { channel: settings.speedChannels }),
-      action: { type: "set_param", param: "particleSpeed" },
+      action: { type: "set_param", param: "speed" },
     })
   }
 
@@ -56,6 +57,9 @@ export function buildRoutes(settings: MidiSettings): MidiRoute[] {
       action: { type: "set_param", param: "rotationY" },
     })
   }
+
+  // Catch-all CC: any CC registered in cc-registry → paramStore (no channel filter)
+  routes.push({ msgType: "cc", action: { type: "set_param", param: "" } })
 
   // Note-off: release targets for mapped 3D shape notes
   for (const note of Object.keys(DEFAULT_NOTE_SHAPE_3D_MAP).map(Number)) {
@@ -263,34 +267,17 @@ export function useMidiRouter(
   }, [particleLifetime])
 
   // -------------------------------------------------------------------------
-  // applyParam — maps named parameter to engine call
+  // applyParam — routes named parameter + scaled value through param store
   // -------------------------------------------------------------------------
-  const applyParam = useCallback((param: string, value: number) => {
-    const api = particlesApiRef.current
-    if (!api?.ready) return
-    switch (param) {
-      case "particleSpeed": {
-        const buf = api.buf
-        for (let i = 0; i < buf.capacity; i++) {
-          const b = i * STRIDE
-          if (buf.data[b + F.AGE] < buf.data[b + F.LIFETIME]) {
-            const vx = buf.data[b + F.VX]
-            const vy = buf.data[b + F.VY]
-            const spd = Math.sqrt(vx * vx + vy * vy)
-            if (spd > 0.001) {
-              buf.data[b + F.VX] = (vx / spd) * value
-              buf.data[b + F.VY] = (vy / spd) * value
-            }
-          }
-        }
-        break
-      }
-      case "linkDistance":
-        api.setRenderConfig({ linkDistance: value })
-        break
-      case "rotationY":
-        shapes3dRef.current?.setRotationSpeed(0.15, value, 0.06)
-        break
+  const applyParam = useCallback((param: string, ccNumber: number, rawValue: number) => {
+    const key = (param || lookupCC(ccNumber)?.param) ?? ""
+    if (!isParamKey(key)) return
+    const scaled = applyCC(ccNumber, rawValue)
+    const reg = lookupCC(ccNumber)
+    if (reg?.smoothFrames && reg.smoothFrames > 0) {
+      paramStore.setLerp(key, scaled, reg.smoothFrames)
+    } else {
+      paramStore.set(key, scaled)
     }
   }, [])
 
@@ -323,7 +310,7 @@ export function useMidiRouter(
         }
         break
       case "set_param":
-        applyParam(action.param, applyCC(msg.data1, msg.data2))
+        applyParam(action.param, msg.data1, msg.data2)
         break
       case "scatter":
         animatorRef.current.scatter()
@@ -333,6 +320,7 @@ export function useMidiRouter(
         break
     }
   }, [applyShape3D, applyShape, applyParam, pulseFanout])
+
 
   // -------------------------------------------------------------------------
   // MIDI message handler

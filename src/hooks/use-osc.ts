@@ -37,6 +37,8 @@ export interface UseOscResult {
   messages: OscInboundMessage[]
   /** Subscribe to a single address (or pattern). Returns an unsubscribe fn. */
   subscribe: (address: string, cb: (args: unknown[]) => void) => () => void
+  /** Subscribe to every inbound message regardless of address. Returns an unsubscribe fn. */
+  subscribeAll: (cb: (msg: OscInboundMessage) => void) => () => void
   /** Send an OSC message. Args may be number, int, float, string, or boolean. */
   send: (address: string, ...args: (number | string | boolean)[]) => void
   /** Manually (re)connect to the bridge. */
@@ -61,6 +63,7 @@ export function useOsc({
   const subscribersRef = useRef<Map<string, Set<(args: unknown[]) => void>>>(
     new Map()
   )
+  const allSubscribersRef = useRef<Set<(msg: OscInboundMessage) => void>>(new Set())
 
   // Opens the OSC connection without touching React state synchronously.
   // All state updates happen inside event callbacks, which is the pattern
@@ -112,6 +115,7 @@ export function useOsc({
 
       const subs = subscribersRef.current.get(message.address)
       if (subs) for (const cb of subs) cb(message.args)
+      for (const cb of allSubscribersRef.current) cb(entry)
     })
 
     try {
@@ -139,6 +143,11 @@ export function useOsc({
       /* ignore */
     }
     setStatus("closed")
+  }, [])
+
+  const subscribeAll = useCallback((cb: (msg: OscInboundMessage) => void) => {
+    allSubscribersRef.current.add(cb)
+    return () => { allSubscribersRef.current.delete(cb) }
   }, [])
 
   const subscribe = useCallback(
@@ -196,7 +205,7 @@ export function useOsc({
   }, [])
 
   return useMemo(
-    () => ({ status, error, messages, subscribe, send, connect, disconnect }),
-    [status, error, messages, subscribe, send, connect, disconnect]
+    () => ({ status, error, messages, subscribe, subscribeAll, send, connect, disconnect }),
+    [status, error, messages, subscribe, subscribeAll, send, connect, disconnect]
   )
 }

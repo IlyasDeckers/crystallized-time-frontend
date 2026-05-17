@@ -15,6 +15,7 @@ import { useBackendBridge } from '@/backend/bridge'
 import { useVisualMappings } from '@/visual-mappings'
 import { useMidiRouter } from '@/midi/use-midi-router'
 import { setupMidiThru } from '@/midi/thru'
+import { useParamOscBridge } from '@/particles/param-osc-bridge'
 
 const OSC_LOG_VISIBLE = 8
 
@@ -62,6 +63,11 @@ function App() {
   // -------------------------------------------------------------------------
   const bridge = useBackendBridge(osc)
   useVisualMappings(particlesApi, bridge)
+
+  // -------------------------------------------------------------------------
+  // Parameter system: OSC ↔ paramStore ↔ engine effects
+  // -------------------------------------------------------------------------
+  useParamOscBridge(osc, particlesApi, shapes3d)
 
   // -------------------------------------------------------------------------
   // MIDI router (replaces useParticleEffects)
@@ -119,8 +125,8 @@ function App() {
       <main className="flex-1 relative overflow-hidden min-h-0">
 
         <ParticlesStage
-          initialCount={20}
-          initialSpeed={1.5}
+          initialCount={50}
+          initialSpeed={0.5}
           config={{
             maxParticles: 4096,
             renderConfig: { linkDistance: 130, linkOpacity: 0.35 },
