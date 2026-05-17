@@ -5,6 +5,7 @@ import { DraggableCard } from '@/components/ui/draggable-card'
 import { OscSendCard } from '@/components/ui/osc-send-card'
 import { MidiSettingsCard, DEFAULT_MIDI_SETTINGS, type MidiSettings } from '@/components/ui/midi-settings-card'
 import { ParticlesStage } from '@/components/ui/particles-stage'
+import { PhotoLayer } from '@/components/ui/photo-layer'
 import { useMidi, type MidiMessage } from '@/hooks/use-midi'
 import { useOsc } from '@/hooks/use-osc'
 import { useShapes3D, SHAPE_3D_NAMES, type Shape3DName } from '@/hooks/use-shapes3d'
@@ -36,6 +37,8 @@ function App() {
   const [midiSettings, setMidiSettings] = useState<MidiSettings>(DEFAULT_MIDI_SETTINGS)
   const [midiActivity, setMidiActivity] = useState(0)
   const lastMidiRef = useRef<MidiMessage | null>(null)
+  const [photoVisible, setPhotoVisible] = useState(false)
+  const photoCanvasRef = useRef<HTMLCanvasElement | null>(null)
 
   // -------------------------------------------------------------------------
   // Particles
@@ -62,7 +65,14 @@ function App() {
   // Backend bridge + visual mappings
   // -------------------------------------------------------------------------
   const bridge = useBackendBridge(osc)
-  useVisualMappings(particlesApi, bridge)
+  useVisualMappings(particlesApi, bridge, osc)
+
+  // OSC: photo layer toggle
+  useEffect(() => {
+    return osc.subscribe('/photo/enable', (args) => {
+      setPhotoVisible(Boolean(args[0]))
+    })
+  }, [osc.subscribe])
 
   // -------------------------------------------------------------------------
   // Parameter system: OSC ↔ paramStore ↔ engine effects
@@ -124,6 +134,7 @@ function App() {
       <Navbar />
       <main className="flex-1 relative overflow-hidden min-h-0">
 
+        <PhotoLayer visible={photoVisible} canvasRef={photoCanvasRef} />
         <ParticlesStage
           initialCount={300}
           initialSpeed={60}
@@ -293,6 +304,17 @@ function App() {
                   bright ×3
                 </button>
               </div>
+            </div>
+
+            {/* Photo layer */}
+            <div className="pt-1 border-t border-border/50">
+              <div className="text-muted-foreground mb-1">photo layer</div>
+              <button
+                onClick={() => setPhotoVisible((v) => !v)}
+                className="px-2 py-1 border border-border hover:bg-muted text-xs"
+              >
+                {photoVisible ? 'hide' : 'show'}
+              </button>
             </div>
 
             {/* OSC */}

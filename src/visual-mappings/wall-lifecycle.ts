@@ -17,8 +17,10 @@ export function createWallLifecycle(
   engine: UseParticlesResult,
   getConfig: () => VisualMappingConfig | null,
 ): WallLifecycle {
-  const wallMap = new Map<number, number>()     // wallId -> particleIndex
-  const wallTargets = new Map<number, number>() // particleIndex -> targetX
+  const wallMap = new Map<number, number>()        // wallId -> particleIndex
+  const wallTargets = new Map<number, number>()    // particleIndex -> targetX
+  const wallCreatedAt = new Map<number, number>()  // particleIndex -> birth time (s)
+  let trailTimer: ReturnType<typeof setTimeout> | undefined
   const { buf } = engine
 
   function wallX(chain: Chain, position: number): number {
@@ -53,7 +55,10 @@ export function createWallLifecycle(
       size: 6,
       lifetime: Infinity,
     })
-    if (idx >= 0) wallMap.set(id, idx)
+    if (idx >= 0) {
+      wallMap.set(id, idx)
+      wallCreatedAt.set(idx, performance.now() / 1000)
+    }
   }
 
   function handleWallDestroyed(event: Extract<BackendEvent, { type: "wall_destroyed" }>): void {
@@ -65,7 +70,19 @@ export function createWallLifecycle(
     const y = buf.data[base + F.Y]
     const [r, g, b] = hslToRgb(wallHue(chain), 1.0, 0.85)
     const group = chain === "a" ? "chain_a_walls" : "chain_b_walls"
-    engine.burst({ group, count: 8, x, y, speed: 60, r, g, b, opacity: 1.0, size: 3, lifetime: 0.8 })
+
+    // Annihilation heuristic: wall that lived < 0.2s bursts large
+    const birthTime = wallCreatedAt.get(idx) ?? (performance.now() / 1000)
+    const actualLifetime = performance.now() / 1000 - birthTime
+    wallCreatedAt.delete(idx)
+
+    if (actualLifetime < 0.2) {
+      const [ar, ag, ab] = hslToRgb(wallHue(chain), 1.0, 0.92)
+      engine.burst({ group, count: 20, x, y, speed: 120, r: ar, g: ag, b: ab, opacity: 1.0, size: 4, lifetime: 1.5 })
+    } else {
+      engine.burst({ group, count: 8, x, y, speed: 60, r, g, b, opacity: 1.0, size: 3, lifetime: 0.8 })
+    }
+
     engine.kill(idx)
     wallMap.delete(id)
     wallTargets.delete(idx)
@@ -76,6 +93,13 @@ export function createWallLifecycle(
     const idx = wallMap.get(id)
     if (idx === undefined) return
     wallTargets.set(idx, wallX(chain, to))
+
+    // Comet trail: enable trail mode for 0.5s while wall is in motion
+    engine.setRenderConfig({ trailMode: true, trailDecay: 0.08 })
+    clearTimeout(trailTimer)
+    trailTimer = setTimeout(() => {
+      engine.setRenderConfig({ trailMode: false })
+    }, 500)
   }
 
   function handleWallNoteOn(event: Extract<BackendEvent, { type: "wall_note_on" }>): void {

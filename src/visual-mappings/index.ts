@@ -1,16 +1,19 @@
 import { useEffect, useRef } from "react"
 import type { UseParticlesResult } from "@/particles/engine"
 import type { UseBackendBridgeResult } from "@/backend/bridge"
+import type { UseOscResult } from "@/hooks/use-osc"
 import { applyChainIdentity } from "./chain-identity"
 import { makeConfig, type VisualMappingConfig } from "./config"
 import { handleGatePulse } from "./gate-pulse"
 import { createWallLifecycle } from "./wall-lifecycle"
 import { createClockPulse } from "./clock-pulse"
 import { createStateDriven } from "./state-driven"
+import { createPhasePortrait } from "./phase-portrait"
 
 export function useVisualMappings(
   engine: UseParticlesResult | null,
   bridge: UseBackendBridgeResult,
+  osc?: UseOscResult,
 ): void {
   const configRef = useRef<VisualMappingConfig | null>(null)
 
@@ -30,9 +33,15 @@ export function useVisualMappings(
     const wallLifecycle = createWallLifecycle(engine, () => configRef.current)
     const clockPulse = createClockPulse(engine)
     const stateDriven = createStateDriven(engine.canvasRef)
+    const portrait = createPhasePortrait(engine)
 
     const cleanWall  = engine.addFrameHook(wallLifecycle.frameHook)
     const cleanState = engine.addFrameHook(stateDriven.frameHook)
+
+    // OSC: toggle phase portrait fullscreen
+    const cleanFullscreen = osc?.subscribe("/phase_portrait/fullscreen", (args) => {
+      portrait.setFullscreen(Boolean(args[0]))
+    })
 
     const unsub = bridge.subscribe((event) => {
       const cfg = configRef.current
@@ -70,6 +79,7 @@ export function useVisualMappings(
           break
         case "state":
           stateDriven.handle(event)
+          portrait.handle(event)
           break
       }
     })
@@ -78,6 +88,7 @@ export function useVisualMappings(
       unsub()
       cleanWall()
       cleanState()
+      cleanFullscreen?.()
     }
   }, [engine?.ready])
 }
