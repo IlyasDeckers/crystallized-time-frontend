@@ -3,18 +3,22 @@ import './App.css'
 import { Navbar } from '@/components/layout/navbar'
 import { DraggableCard } from '@/components/ui/draggable-card'
 import { OscSendCard } from '@/components/ui/osc-send-card'
-import { ParticlesStage } from './components/ui/particles-stage'
+import { MidiSettingsCard, DEFAULT_MIDI_SETTINGS, type MidiSettings } from '@/components/ui/midi-settings-card'
+import { ParticlesStage } from '@/components/ui/particles-stage'
 import { useMidi, type MidiMessage } from '@/hooks/use-midi'
 import { useOsc } from '@/hooks/use-osc'
+import { useShapes3D, SHAPE_3D_NAMES, type Shape3DName } from '@/hooks/use-shapes3d'
 import { useParticleEffects } from '@/hooks/use-particle-effects'
 import { SHAPES, type ShapeName } from '@/hooks/particle-shapes'
-import type { UseParticlesResult } from './hooks/use-particles'
+import type { UseParticlesResult } from '@/hooks/use-particles'
 
 const OSC_LOG_VISIBLE = 8
 
 function App() {
   const [debugOpen, setDebugOpen] = useState(true)
   const [sendOpen, setSendOpen] = useState(true)
+  const [midiOpen, setMidiOpen] = useState(true)
+  const [midiSettings, setMidiSettings] = useState<MidiSettings>(DEFAULT_MIDI_SETTINGS)
   const [midiActivity, setMidiActivity] = useState(0)
   const lastMidiRef = useRef<MidiMessage | null>(null)
 
@@ -24,23 +28,15 @@ function App() {
   const [particlesApi, setParticlesApi] = useState<UseParticlesResult | null>(null)
 
   // -------------------------------------------------------------------------
-  // MIDI
+  // 3D shapes — lives here so App can also call impulse/setRotationSpeed
   // -------------------------------------------------------------------------
-  const midi = useMidi({
-    onMessage: useCallback((msg: MidiMessage) => {
-      lastMidiRef.current = msg
-      setMidiActivity((n) => (n + 1) % 1_000_000)
-    }, []),
+  const shapes3d = useShapes3D(particlesApi, {
+    scale: 0.5,
+    focalLength: 600,   // higher = less perspective distortion, more orthographic
+    depth: 0.5,           // lower = more dramatic perspective
+    rotationSpeed: [0.15, 0.28, 0.06],
+    autoRotate: true,
   })
-
-  // Auto-select ports once connected
-  useEffect(() => {
-    // console.log(midi.inputs)
-    if (midi.status === 'connected') {
-      if (!midi.selectedInput && midi.inputs[3]) midi.selectInput(midi.inputs[3])
-      if (!midi.selectedOutput && midi.outputs[3]) midi.selectOutput(midi.outputs[3])
-    }
-  }, [midi.status, midi.inputs, midi.outputs, midi.selectedInput, midi.selectedOutput, midi.selectInput, midi.selectOutput, midi])
 
   // -------------------------------------------------------------------------
   // OSC
@@ -48,63 +44,39 @@ function App() {
   const osc = useOsc({ url: 'ws://localhost:8080', logSize: 200 })
 
   // -------------------------------------------------------------------------
-  // Particle effects — wires MIDI + OSC to the particle system
+  // Particle effects
   // -------------------------------------------------------------------------
-  const effects = useParticleEffects(particlesApi, osc, {
-    noteShapeMap: {
-      60: 'circle',
-      62: 'spiral',
-      64: 'grid',
-      65: 'rings',
-      67: 'star',
-      69: 'lissajous',
-      71: 'waveform',
-      72: 'scatter',
-    },
-    pulseChannel: 15,
+  const effects = useParticleEffects(particlesApi, osc, shapes3d, {
+    noteShapeMap: {},
+    noteShape3DMap: {},
+    ...midiSettings,
     pulseFanout: 1,
-    speedCC: 74,
-    linkDistanceCC: 71,
-    oscPulseAddress: '/pulse/fire',
-    oscShapeAddress: '/shape/set',
-    oscScatterAddress: '/scatter',
+    particleLifetime: 10,
+    fadeOutDuration: 2,
+    maxParticles: 150,
   })
 
-  // Forward MIDI messages to the effects system. We do this separately
-  // from the useMidi onMessage so we can keep the activity counter above
-  // decoupled from the effects ref stability.
   const effectsRef = useRef(effects)
   useEffect(() => { effectsRef.current = effects }, [effects])
 
+  // -------------------------------------------------------------------------
+  // MIDI
+  // -------------------------------------------------------------------------
   const handleMidiMessage = useCallback((msg: MidiMessage) => {
     lastMidiRef.current = msg
     setMidiActivity((n) => (n + 1) % 1_000_000)
     effectsRef.current.handleMidi(msg)
   }, [])
 
-  // Re-wire the MIDI handler now that we have the effects ref. We need a
-  // stable callback passed to useMidi, so we use a ref-forwarding pattern.
-  const midiWithEffects = useMidi({ onMessage: handleMidiMessage })
+  const midi = useMidi({ onMessage: handleMidiMessage })
 
-  // Sync port selection from the first midi instance to the second
   useEffect(() => {
-    if (midiWithEffects.status === 'connected') {
-      if (!midiWithEffects.selectedInput && midiWithEffects.inputs[3]) {
-        midiWithEffects.selectInput(midiWithEffects.inputs[3])
-      }
-      if (!midiWithEffects.selectedOutput && midiWithEffects.outputs[3]) {
-        midiWithEffects.selectOutput(midiWithEffects.outputs[3])
-      }
+    if (midi.status === 'connected') {
+      if (!midi.selectedInput && midi.inputs[3]) midi.selectInput(midi.inputs[3])
+      if (!midi.selectedOutput && midi.outputs[3]) midi.selectOutput(midi.outputs[3])
     }
-  }, [
-    midiWithEffects.status,
-    midiWithEffects.inputs,
-    midiWithEffects.outputs,
-    midiWithEffects.selectedInput,
-    midiWithEffects.selectedOutput,
-    midiWithEffects.selectInput,
-    midiWithEffects.selectOutput,
-  ])
+  }, [midi.status, midi.inputs, midi.outputs, midi.selectedInput, midi.selectedOutput,
+    midi.selectInput, midi.selectOutput])
 
   const recentOsc = osc.messages.slice(-OSC_LOG_VISIBLE).reverse()
   const last = lastMidiRef.current
@@ -117,7 +89,7 @@ function App() {
         <ParticlesStage
           id="particles-stage"
           config={{
-            count: 150,
+            count: 20,
             speed: 1.5,
             linkedDistance: 130,
             linkedOpacity: 0.35,
@@ -137,31 +109,40 @@ function App() {
         >
           <div className="space-y-2 font-mono">
 
-            {/* MIDI status */}
+            {/* MIDI */}
             <div>
-              <div className="text-muted-foreground">midi status</div>
-              <div className="text-foreground">{midiWithEffects.status}</div>
-              {midiWithEffects.status === 'idle' && (
+              <div className="flex items-center justify-between">
+                <div className="text-muted-foreground">midi status</div>
+                {!midiOpen && (
+                  <button
+                    onClick={() => setMidiOpen(true)}
+                    className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px]"
+                  >
+                    midi settings
+                  </button>
+                )}
+              </div>
+              <div className="text-foreground">{midi.status}</div>
+              {midi.status === 'idle' && (
                 <button
-                  onClick={() => midiWithEffects.connect()}
+                  onClick={() => midi.connect()}
                   className="mt-1 px-2 py-1 border border-border hover:bg-muted text-xs"
                 >
                   connect midi
                 </button>
               )}
-              {midiWithEffects.status === 'connected' && (
+              {midi.status === 'connected' && (
                 <>
                   <div className="text-muted-foreground mt-2">
-                    in: <span className="text-foreground">{midiWithEffects.selectedInput ?? '—'}</span>
+                    in: <span className="text-foreground">{midi.selectedInput ?? '—'}</span>
                   </div>
                   <div className="text-muted-foreground">
-                    out: <span className="text-foreground">{midiWithEffects.selectedOutput ?? '—'}</span>
+                    out: <span className="text-foreground">{midi.selectedOutput ?? '—'}</span>
                   </div>
                 </>
               )}
             </div>
 
-            {/* Last MIDI message */}
             {last && (
               <div>
                 <div className="text-muted-foreground">last msg</div>
@@ -177,14 +158,31 @@ function App() {
               <div className="text-muted-foreground">particles</div>
               <div className="text-foreground">
                 {particlesApi?.ready
-                  ? `${particlesApi.particles.length} particles · ${particlesApi.canvasSize.w}×${particlesApi.canvasSize.h}`
+                  ? `${particlesApi.particles.length} / 400`
                   : 'loading…'}
               </div>
             </div>
 
-            {/* Shape picker */}
+            {/* 3D shape picker */}
             <div className="pt-1 border-t border-border/50">
-              <div className="text-muted-foreground mb-1">shapes</div>
+              <div className="text-muted-foreground mb-1">3d shapes</div>
+              <div className="flex flex-wrap gap-1">
+                {SHAPE_3D_NAMES.map((name) => (
+                  <button
+                    key={name}
+                    onClick={() => effects.applyShape3D(name as Shape3DName)}
+                    disabled={!particlesApi?.ready}
+                    className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px] disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 2D shape picker */}
+            <div className="pt-1 border-t border-border/50">
+              <div className="text-muted-foreground mb-1">2d shapes</div>
               <div className="flex flex-wrap gap-1">
                 {Object.keys(SHAPES).map((name) => (
                   <button
@@ -196,14 +194,49 @@ function App() {
                     {name}
                   </button>
                 ))}
+                <button
+                  onClick={() => effects.animator.scatter()}
+                  disabled={!particlesApi?.ready}
+                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px] disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  scatter
+                </button>
               </div>
-              <button
-                onClick={() => effects.animator.scatter()}
-                disabled={!particlesApi?.ready}
-                className="mt-1 px-2 py-1 border border-border hover:bg-muted text-[10px] w-full disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                scatter
-              </button>
+            </div>
+
+            {/* Rotation controls */}
+            <div className="pt-1 border-t border-border/50">
+              <div className="text-muted-foreground mb-1">rotation</div>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => shapes3d.impulse(0, 0.8, 0)}
+                  disabled={!particlesApi?.ready}
+                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px] disabled:opacity-30"
+                >
+                  kick Y
+                </button>
+                <button
+                  onClick={() => shapes3d.impulse(0.5, 0, 0)}
+                  disabled={!particlesApi?.ready}
+                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px] disabled:opacity-30"
+                >
+                  kick X
+                </button>
+                <button
+                  onClick={() => shapes3d.setRotationSpeed(0, 0, 0)}
+                  disabled={!particlesApi?.ready}
+                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px] disabled:opacity-30"
+                >
+                  stop
+                </button>
+                <button
+                  onClick={() => shapes3d.setRotationSpeed(0.15, 0.28, 0.06)}
+                  disabled={!particlesApi?.ready}
+                  className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px] disabled:opacity-30"
+                >
+                  reset
+                </button>
+              </div>
             </div>
 
             {/* Pulse test */}
@@ -211,26 +244,26 @@ function App() {
               <div className="text-muted-foreground mb-1">pulse</div>
               <div className="flex gap-1">
                 <button
-                  onClick={() => effects.pulse.fire(-1, 1.0)}
+                  onClick={() => effects.pulse.fire(-1, 1.0, false)}
                   disabled={!particlesApi?.ready}
-                  className="px-2 py-1 border border-border hover:bg-muted text-[10px] disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="px-2 py-1 border border-border hover:bg-muted text-[10px] disabled:opacity-30"
                 >
-                  fire ×1
+                  dim ×1
                 </button>
                 <button
-                  onClick={() => effects.pulse.fireRandom(5, 0.8)}
+                  onClick={() => effects.pulse.fireRandom(3, 1.0, true)}
                   disabled={!particlesApi?.ready}
-                  className="px-2 py-1 border border-border hover:bg-muted text-[10px] disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="px-2 py-1 border border-border hover:bg-muted text-[10px] disabled:opacity-30"
                 >
-                  fire ×5
+                  bright ×3
                 </button>
               </div>
             </div>
 
-            {/* OSC status */}
+            {/* OSC */}
             <div className="pt-1 border-t border-border/50">
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">osc status</span>
+                <span className="text-muted-foreground">osc</span>
                 <span className="text-foreground">{osc.status}</span>
               </div>
               {osc.error && (
@@ -243,32 +276,30 @@ function App() {
                   onClick={() => osc.connect()}
                   className="mt-1 px-2 py-1 border border-border hover:bg-muted text-xs"
                 >
-                  reconnect osc
+                  reconnect
                 </button>
               )}
-              {/*<div className="text-muted-foreground mt-2">recent in</div>*/}
-              {/*<div className="mt-0.5 space-y-0.5 max-h-32 overflow-y-auto">*/}
-              {/*  {recentOsc.length === 0 ? (*/}
-              {/*    <div className="text-muted-foreground/60 text-[10px]">—</div>*/}
-              {/*  ) : (*/}
-              {/*    recentOsc.map((m) => (*/}
-              {/*      <div key={m.id} className="text-[10px] leading-tight truncate">*/}
-              {/*        <span className="text-foreground">{m.address}</span>*/}
-              {/*        {m.args.length > 0 && (*/}
-              {/*          <span className="text-muted-foreground ml-1">*/}
-              {/*            {m.args*/}
-              {/*              .map((a) =>*/}
-              {/*                typeof a === 'number'*/}
-              {/*                  ? Number.isInteger(a) ? a.toString() : a.toFixed(3)*/}
-              {/*                  : String(a)*/}
-              {/*              )*/}
-              {/*              .join(' ')}*/}
-              {/*          </span>*/}
-              {/*        )}*/}
-              {/*      </div>*/}
-              {/*    ))*/}
-              {/*  )}*/}
-              {/*</div>*/}
+              <div className="text-muted-foreground mt-2">recent in</div>
+              <div className="mt-0.5 space-y-0.5 max-h-32 overflow-y-auto">
+                {recentOsc.length === 0 ? (
+                  <div className="text-muted-foreground/60 text-[10px]">—</div>
+                ) : (
+                  recentOsc.map((m) => (
+                    <div key={m.id} className="text-[10px] leading-tight truncate">
+                      <span className="text-foreground">{m.address}</span>
+                      {m.args.length > 0 && (
+                        <span className="text-muted-foreground ml-1">
+                          {m.args.map((a) =>
+                            typeof a === 'number'
+                              ? Number.isInteger(a) ? a.toString() : a.toFixed(3)
+                              : String(a)
+                          ).join(' ')}
+                        </span>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
 
           </div>
@@ -279,6 +310,13 @@ function App() {
           onClose={() => setSendOpen(false)}
           send={osc.send}
           enabled={osc.status === 'connected'}
+        />
+
+        <MidiSettingsCard
+          open={midiOpen}
+          onClose={() => setMidiOpen(false)}
+          settings={midiSettings}
+          onChange={setMidiSettings}
         />
 
       </main>
