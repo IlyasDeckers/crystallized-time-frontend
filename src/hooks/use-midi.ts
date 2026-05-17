@@ -32,6 +32,10 @@ export interface UseMidiResult {
   sendNoteOff: (channel: number, note: number) => void
   /** Request MIDI access. Must be called from a user gesture. */
   connect: () => Promise<void>
+  /** Get raw MIDIInput by port name — needed for setupMidiThru. */
+  getRawInput: (name: string) => MIDIInput | null
+  /** Get raw MIDIOutput by port name — needed for setupMidiThru. */
+  getRawOutput: (name: string) => MIDIOutput | null
 }
 
 function parseMessage(data: Uint8Array, timestamp: number): MidiMessage {
@@ -130,6 +134,24 @@ export function useMidi({ onMessage }: UseMidiOptions = {}): UseMidiResult {
     sendBytes([0x80 | (channel & 0x0f), note & 0x7f, 0])
   }, [sendBytes])
 
+  const getRawInput = useCallback((name: string): MIDIInput | null => {
+    const access = accessRef.current
+    if (!access) return null
+    for (const input of access.inputs.values()) {
+      if (input.name === name) return input
+    }
+    return null
+  }, [])
+
+  const getRawOutput = useCallback((name: string): MIDIOutput | null => {
+    const access = accessRef.current
+    if (!access) return null
+    for (const output of access.outputs.values()) {
+      if (output.name === name) return output
+    }
+    return null
+  }, [])
+
   return {
     status,
     inputs,
@@ -141,5 +163,7 @@ export function useMidi({ onMessage }: UseMidiOptions = {}): UseMidiResult {
     sendNoteOn,
     sendNoteOff,
     connect,
+    getRawInput,
+    getRawOutput,
   }
 }

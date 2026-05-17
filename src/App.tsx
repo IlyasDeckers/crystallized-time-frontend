@@ -8,12 +8,13 @@ import { ParticlesStage } from '@/components/ui/particles-stage'
 import { useMidi, type MidiMessage } from '@/hooks/use-midi'
 import { useOsc } from '@/hooks/use-osc'
 import { useShapes3D, SHAPE_3D_NAMES, type Shape3DName } from '@/hooks/use-shapes3d'
-import { useParticleEffects } from '@/hooks/use-particle-effects'
 import { SHAPES, type ShapeName } from '@/hooks/particle-shapes'
 import type { UseParticlesResult } from '@/particles/engine'
 import { STRIDE, F } from '@/particles/buffer'
 import { useBackendBridge } from '@/backend/bridge'
 import { useVisualMappings } from '@/visual-mappings'
+import { useMidiRouter } from '@/midi/use-midi-router'
+import { setupMidiThru } from '@/midi/thru'
 
 const OSC_LOG_VISIBLE = 8
 
@@ -63,20 +64,17 @@ function App() {
   useVisualMappings(particlesApi, bridge)
 
   // -------------------------------------------------------------------------
-  // Particle effects
+  // MIDI router (replaces useParticleEffects)
   // -------------------------------------------------------------------------
-  const effects = useParticleEffects(particlesApi, osc, shapes3d, {
-    noteShapeMap: {},
-    noteShape3DMap: {},
-    ...midiSettings,
+  const router = useMidiRouter(particlesApi, osc, shapes3d, midiSettings, {
     pulseFanout: 1,
     particleLifetime: 10,
     fadeOutDuration: 2,
     maxParticles: 150,
   })
 
-  const effectsRef = useRef(effects)
-  useEffect(() => { effectsRef.current = effects }, [effects])
+  const routerRef = useRef(router)
+  useEffect(() => { routerRef.current = router }, [router])
 
   // -------------------------------------------------------------------------
   // MIDI
@@ -87,7 +85,7 @@ function App() {
   const handleMidiMessage = useCallback((msg: MidiMessage) => {
     lastMidiRef.current = msg
     setMidiActivity((n) => (n + 1) % 1_000_000)
-    effectsRef.current.handleMidi(msg)
+    routerRef.current.handleMidi(msg)
     bridgeRef.current.handleMidi(msg)
   }, [])
 
@@ -100,6 +98,17 @@ function App() {
     }
   }, [midi.status, midi.inputs, midi.outputs, midi.selectedInput, midi.selectedOutput,
     midi.selectInput, midi.selectOutput])
+
+  // MIDI thru — forward raw bytes when a thru output port is selected
+  useEffect(() => {
+    if (midi.status !== 'connected') return
+    if (!midi.selectedInput || !midiSettings.thruOutput) return
+    const inputPort = midi.getRawInput(midi.selectedInput)
+    const outputPort = midi.getRawOutput(midiSettings.thruOutput)
+    if (!inputPort || !outputPort) return
+    return setupMidiThru(inputPort, outputPort)
+  }, [midi.status, midi.selectedInput, midiSettings.thruOutput,
+    midi.getRawInput, midi.getRawOutput])
 
   const recentOsc = osc.messages.slice(-OSC_LOG_VISIBLE).reverse()
   const last = lastMidiRef.current
@@ -190,7 +199,7 @@ function App() {
                 {SHAPE_3D_NAMES.map((name) => (
                   <button
                     key={name}
-                    onClick={() => effects.applyShape3D(name as Shape3DName)}
+                    onClick={() => router.applyShape3D(name as Shape3DName)}
                     disabled={!particlesApi?.ready}
                     className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px] disabled:opacity-30 disabled:cursor-not-allowed"
                   >
@@ -207,7 +216,7 @@ function App() {
                 {Object.keys(SHAPES).map((name) => (
                   <button
                     key={name}
-                    onClick={() => effects.applyShape(name as ShapeName)}
+                    onClick={() => router.applyShape(name as ShapeName)}
                     disabled={!particlesApi?.ready}
                     className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px] disabled:opacity-30 disabled:cursor-not-allowed"
                   >
@@ -215,7 +224,7 @@ function App() {
                   </button>
                 ))}
                 <button
-                  onClick={() => effects.animator.scatter()}
+                  onClick={() => router.animator.scatter()}
                   disabled={!particlesApi?.ready}
                   className="px-1.5 py-0.5 border border-border hover:bg-muted text-[10px] disabled:opacity-30 disabled:cursor-not-allowed"
                 >
@@ -264,14 +273,14 @@ function App() {
               <div className="text-muted-foreground mb-1">pulse</div>
               <div className="flex gap-1">
                 <button
-                  onClick={() => effects.pulse.fire(-1, 1.0, false)}
+                  onClick={() => router.pulse.fire(-1, 1.0, false)}
                   disabled={!particlesApi?.ready}
                   className="px-2 py-1 border border-border hover:bg-muted text-[10px] disabled:opacity-30"
                 >
                   dim ×1
                 </button>
                 <button
-                  onClick={() => effects.pulse.fireRandom(3, 1.0, true)}
+                  onClick={() => router.pulse.fireRandom(3, 1.0, true)}
                   disabled={!particlesApi?.ready}
                   className="px-2 py-1 border border-border hover:bg-muted text-[10px] disabled:opacity-30"
                 >
@@ -337,6 +346,7 @@ function App() {
           onClose={() => setMidiOpen(false)}
           settings={midiSettings}
           onChange={setMidiSettings}
+          outputs={midi.outputs}
         />
 
       </main>
