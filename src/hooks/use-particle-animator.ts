@@ -115,7 +115,7 @@ export function useParticleAnimator(
     }
   }, [restoreVelocityOnRelease])
 
-  const scatter = useCallback((strength = 5) => {
+  const scatter = useCallback((strength = 120) => {
     const buf = particlesApiRef.current?.buf
     if (!buf) return
     targetsRef.current = null

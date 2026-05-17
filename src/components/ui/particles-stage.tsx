@@ -55,7 +55,7 @@ export function ParticlesStage({
           speed: initialSpeed,
           r: 1, g: 1, b: 1,
           opacity: 0.7,
-          size: 2.5,
+          size: 3.5,
         })
       }
     }

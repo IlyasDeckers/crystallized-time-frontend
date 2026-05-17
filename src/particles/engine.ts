@@ -147,6 +147,24 @@ export function useParticles(config: EngineConfig = {}): UseParticlesResult {
         hook({ buf, time, dt })
       }
 
+      // Integrate velocity (px/s) and bounce off canvas bounds.
+      // Frame hooks run first so they can zero vx/vy before integration
+      // (e.g. the animator zeroes velocity for particles it controls).
+      const cw = canvas.offsetWidth
+      const ch = canvas.offsetHeight
+      const d = buf.data
+      const allocated = cursorRef.current
+      for (let i = 0; i < allocated; i++) {
+        const b = i * STRIDE
+        if (d[b + F.AGE] >= d[b + F.LIFETIME]) continue
+        d[b + F.X] += d[b + F.VX] * dt
+        d[b + F.Y] += d[b + F.VY] * dt
+        if (d[b + F.X] < 0) { d[b + F.X] = 0; d[b + F.VX] = Math.abs(d[b + F.VX]) }
+        else if (d[b + F.X] > cw) { d[b + F.X] = cw; d[b + F.VX] = -Math.abs(d[b + F.VX]) }
+        if (d[b + F.Y] < 0) { d[b + F.Y] = 0; d[b + F.VY] = Math.abs(d[b + F.VY]) }
+        else if (d[b + F.Y] > ch) { d[b + F.Y] = ch; d[b + F.VY] = -Math.abs(d[b + F.VY]) }
+      }
+
       // Advance age and auto-kill expired particles
       for (const [, group] of groupsRef.current) {
         for (let i = group.start; i < group.end; i++) {

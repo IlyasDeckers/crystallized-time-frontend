@@ -259,9 +259,9 @@ export function useMidiRouter(
       group: "spawned",
       count: 1,
       x, y,
-      speed: 0.3 + (midiVelocity / 127) * 2.2,
+      speed: 30 + (midiVelocity / 127) * 120,
       opacity: 0.7,
-      size: 2.5,
+      size: 3.5,
       lifetime: particleLifetime,
     })
   }, [particleLifetime])

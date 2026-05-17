@@ -76,7 +76,7 @@ function App() {
     pulseFanout: 1,
     particleLifetime: 10,
     fadeOutDuration: 2,
-    maxParticles: 150,
+    maxParticles: 400,
   })
 
   const routerRef = useRef(router)
@@ -125,8 +125,8 @@ function App() {
       <main className="flex-1 relative overflow-hidden min-h-0">
 
         <ParticlesStage
-          initialCount={50}
-          initialSpeed={0.5}
+          initialCount={300}
+          initialSpeed={60}
           config={{
             maxParticles: 4096,
             renderConfig: { linkDistance: 130, linkOpacity: 0.35 },

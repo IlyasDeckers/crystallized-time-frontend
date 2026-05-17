@@ -40,7 +40,7 @@ out vec4 fragColor;
 
 void main() {
   float dist  = length(v_uv - 0.5) * 2.0;  // 0 at center, 1 at edge
-  float alpha = smoothstep(1.0, 0.6, dist);
+  float alpha = smoothstep(1.0, 0.75, dist);
   fragColor   = vec4(v_color, alpha * v_opacity);
 }
 `
@@ -120,6 +120,40 @@ void main() {
   c += texture(u_tex, v_uv + texel * 4.0) * w4;
   c += texture(u_tex, v_uv - texel * 4.0) * w4;
   fragColor = c;
+}
+`
+
+// Link (line segment) vertex + fragment shaders.
+const LINK_VERT = /* glsl */`#version 300 es
+precision highp float;
+
+layout(location=0) in vec2 a_pos;
+layout(location=1) in vec3 a_color;
+layout(location=2) in float a_alpha;
+
+uniform vec2 u_resolution;
+
+out vec3 v_color;
+out float v_alpha;
+
+void main() {
+  vec2 clip = (a_pos / u_resolution) * 2.0 - 1.0;
+  gl_Position = vec4(clip * vec2(1.0, -1.0), 0.0, 1.0);
+  v_color  = a_color;
+  v_alpha  = a_alpha;
+}
+`
+
+const LINK_FRAG = /* glsl */`#version 300 es
+precision highp float;
+
+in vec3 v_color;
+in float v_alpha;
+
+out vec4 fragColor;
+
+void main() {
+  fragColor = vec4(v_color, v_alpha);
 }
 `
 
@@ -246,6 +280,14 @@ export class WebGLRenderer implements Renderer {
   private trailFbos: [FBO, FBO] | null = null
   private trailReadIdx = 0
 
+  // Link rendering
+  private linkProg: WebGLProgram
+  private uLinkRes: WebGLUniformLocation
+  private linkVao: WebGLVertexArrayObject
+  private linkVbo: WebGLBuffer
+  // 6 floats per vertex × 2 vertices per link
+  private linkData: Float32Array = new Float32Array(8192 * 12)
+
   // Glow mode programs + FBOs (lazy-init)
   private blurProg: WebGLProgram | null = null
   private uBlurTex: WebGLUniformLocation | null = null
@@ -330,6 +372,26 @@ export class WebGLRenderer implements Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.blitVbo)
     gl.enableVertexAttribArray(0)
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
+    gl.bindVertexArray(null)
+
+    // ---- Link program + VBO ----
+    this.linkProg = buildProgram(gl, LINK_VERT, LINK_FRAG)
+    this.uLinkRes = gl.getUniformLocation(this.linkProg, "u_resolution")!
+
+    this.linkVbo = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.linkVbo)
+    gl.bufferData(gl.ARRAY_BUFFER, this.linkData, gl.DYNAMIC_DRAW)
+
+    const linkStride = 6 * 4  // 6 floats × 4 bytes
+    this.linkVao = gl.createVertexArray()!
+    gl.bindVertexArray(this.linkVao)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.linkVbo)
+    gl.enableVertexAttribArray(0)
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, linkStride, 0)       // a_pos
+    gl.enableVertexAttribArray(1)
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, linkStride, 2 * 4)   // a_color
+    gl.enableVertexAttribArray(2)
+    gl.vertexAttribPointer(2, 1, gl.FLOAT, false, linkStride, 5 * 4)   // a_alpha
     gl.bindVertexArray(null)
   }
 
@@ -442,6 +504,59 @@ export class WebGLRenderer implements Renderer {
     gl.bindVertexArray(null)
   }
 
+  // ---- Link draw ----
+
+  private packAndDrawLinks(buf: ParticleBuffer, linkDistance: number, linkOpacity: number): void {
+    if (linkDistance <= 0 || linkOpacity <= 0) return
+    const { data, capacity } = buf
+    const d2max = linkDistance * linkDistance
+
+    const alive: number[] = []
+    for (let i = 0; i < capacity; i++) {
+      const b = i * STRIDE
+      if (data[b + F.AGE] < data[b + F.LIFETIME]) alive.push(i)
+    }
+    if (alive.length < 2) return
+
+    const maxLinks = (this.linkData.length / 12) | 0
+    let linkCount = 0
+
+    outer:
+    for (let ai = 0; ai < alive.length; ai++) {
+      const i = alive[ai]
+      const bi = i * STRIDE
+      const xi = data[bi + F.X], yi = data[bi + F.Y]
+      const ri = data[bi + F.R], gi = data[bi + F.G], bli = data[bi + F.B]
+      for (let aj = ai + 1; aj < alive.length; aj++) {
+        if (linkCount >= maxLinks) break outer
+        const j = alive[aj]
+        const bj = j * STRIDE
+        const dx = xi - data[bj + F.X], dy = yi - data[bj + F.Y]
+        const d2 = dx * dx + dy * dy
+        if (d2 >= d2max) continue
+        const alpha = (1 - Math.sqrt(d2) / linkDistance) * linkOpacity
+        const off = linkCount * 12
+        this.linkData[off]     = xi;              this.linkData[off + 1] = yi
+        this.linkData[off + 2] = ri;              this.linkData[off + 3] = gi; this.linkData[off + 4] = bli
+        this.linkData[off + 5] = alpha
+        this.linkData[off + 6] = data[bj + F.X]; this.linkData[off + 7] = data[bj + F.Y]
+        this.linkData[off + 8] = ri;              this.linkData[off + 9] = gi; this.linkData[off + 10] = bli
+        this.linkData[off + 11] = alpha
+        linkCount++
+      }
+    }
+    if (linkCount === 0) return
+
+    const gl = this.gl
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.linkVbo)
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.linkData, 0, linkCount * 12)
+    gl.useProgram(this.linkProg)
+    gl.uniform2f(this.uLinkRes, this.cssW, this.cssH)
+    gl.bindVertexArray(this.linkVao)
+    gl.drawArrays(gl.LINES, 0, linkCount * 2)
+    gl.bindVertexArray(null)
+  }
+
   // ---- Main draw ----
 
   draw(buf: ParticleBuffer, config: RenderConfig) {
@@ -474,7 +589,8 @@ export class WebGLRenderer implements Renderer {
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
       gl.bindVertexArray(null)
 
-      // Draw new particles on top
+      // Draw links + new particles on top
+      this.packAndDrawLinks(buf, config.linkDistance, config.linkOpacity)
       this.uploadAndDrawParticles(count)
 
       // Blit accumulated frame to screen
@@ -496,6 +612,7 @@ export class WebGLRenderer implements Renderer {
       gl.bindFramebuffer(gl.FRAMEBUFFER, scene.fbo)
       gl.clearColor(0, 0, 0, 0)
       gl.clear(gl.COLOR_BUFFER_BIT)
+      this.packAndDrawLinks(buf, config.linkDistance, config.linkOpacity)
       this.uploadAndDrawParticles(count)
 
       // Horizontal blur: scene → blurH
@@ -545,6 +662,7 @@ export class WebGLRenderer implements Renderer {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null)
       gl.clearColor(0, 0, 0, 0)
       gl.clear(gl.COLOR_BUFFER_BIT)
+      this.packAndDrawLinks(buf, config.linkDistance, config.linkOpacity)
       this.uploadAndDrawParticles(count)
     }
   }
@@ -557,6 +675,10 @@ export class WebGLRenderer implements Renderer {
     gl.deleteBuffer(this.blitVbo)
     gl.deleteVertexArray(this.particleVao)
     gl.deleteVertexArray(this.blitVao)
+
+    gl.deleteProgram(this.linkProg)
+    gl.deleteBuffer(this.linkVbo)
+    gl.deleteVertexArray(this.linkVao)
 
     if (this.trailProg)  gl.deleteProgram(this.trailProg)
     if (this.trailFbos) { dropFBO(gl, this.trailFbos[0]); dropFBO(gl, this.trailFbos[1]) }
