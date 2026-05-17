@@ -1,0 +1,253 @@
+import { useCallback, useEffect, useRef, useState } from "react"
+import type { RefObject } from "react"
+import {
+  createBuffer, spawnParticle, killParticle,
+  type ParticleBuffer, STRIDE, F,
+} from "./buffer"
+
+export type { ParticleBuffer }
+
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+export interface EngineConfig {
+  maxParticles?: number
+  /** "auto" picks WebGL when available, falls back to canvas2d. */
+  renderer?: "webgl" | "canvas2d" | "auto"
+  /** Max seconds per frame passed to hooks (default 0.1). */
+  dtCap?: number
+}
+
+export type FrameHook = (ctx: {
+  buf: ParticleBuffer
+  time: number
+  dt: number
+}) => void
+
+export interface GroupConfig {
+  maxParticles: number
+}
+
+export interface BurstOptions {
+  group: string
+  count: number
+  x?: number
+  y?: number
+  speed?: number
+  r?: number
+  g?: number
+  b?: number
+  opacity?: number
+  size?: number
+  lifetime?: number
+}
+
+export interface UseParticlesResult {
+  ready: boolean
+  canvasRef: RefObject<HTMLCanvasElement | null>
+  buf: ParticleBuffer
+  canvasSize: { w: number; h: number }
+  addFrameHook: (fn: FrameHook) => () => void
+  groups: {
+    addGroup: (name: string, config: GroupConfig) => void
+    removeGroup: (name: string) => void
+    /** Associate a shape name with the group for later use by animator hooks. */
+    setGroupShape: (name: string, shape: string) => void
+  }
+  burst: (options: BurstOptions) => void
+}
+
+// ---------------------------------------------------------------------------
+// Internal
+// ---------------------------------------------------------------------------
+
+interface GroupEntry {
+  name: string
+  start: number
+  end: number
+  activeCount: { value: number }
+  shape?: string
+}
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
+
+export function useParticles(config: EngineConfig = {}): UseParticlesResult {
+  const { maxParticles = 4096, dtCap = 0.1 } = config
+
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const bufRef = useRef(createBuffer(maxParticles))
+  const hooksRef = useRef<FrameHook[]>([])
+  const groupsRef = useRef(new Map<string, GroupEntry>())
+  const freeListRef = useRef<Array<{ start: number; end: number }>>([])
+  const cursorRef = useRef(0)
+  const rafRef = useRef(0)
+  const startTimeRef = useRef(0)
+  const lastTimeRef = useRef(0)
+  // Keep dtCap readable inside rAF without recreating the closure
+  const dtCapRef = useRef(dtCap)
+  dtCapRef.current = dtCap
+
+  const [ready, setReady] = useState(false)
+  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 })
+
+  // -------------------------------------------------------------------------
+  // rAF loop — starts once on mount, runs for the lifetime of the component
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    const t0 = performance.now() / 1000
+    startTimeRef.current = t0
+    lastTimeRef.current = t0
+    setReady(true)
+
+    const tick = (timestamp: number) => {
+      const t = timestamp / 1000
+      const dt = Math.min(t - lastTimeRef.current, dtCapRef.current)
+      lastTimeRef.current = t
+      const time = t - startTimeRef.current
+      const buf = bufRef.current
+
+      for (const hook of hooksRef.current) {
+        hook({ buf, time, dt })
+      }
+
+      // Advance age and auto-kill expired particles per group
+      for (const [, group] of groupsRef.current) {
+        for (let i = group.start; i < group.end; i++) {
+          const b = i * STRIDE
+          const age = buf.data[b + F.AGE]
+          const lifetime = buf.data[b + F.LIFETIME]
+          if (age < lifetime) {
+            const newAge = age + dt
+            buf.data[b + F.AGE] = newAge
+            if (newAge >= lifetime) {
+              killParticle(buf, i, group.activeCount)
+            }
+          }
+        }
+      }
+
+      // renderer.draw() called here in Stage 3+
+
+      rafRef.current = requestAnimationFrame(tick)
+    }
+
+    rafRef.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [])
+
+  // -------------------------------------------------------------------------
+  // Track canvas size
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const observer = new ResizeObserver(() => {
+      setCanvasSize({ w: canvas.offsetWidth, h: canvas.offsetHeight })
+    })
+    observer.observe(canvas)
+    setCanvasSize({ w: canvas.offsetWidth, h: canvas.offsetHeight })
+    return () => observer.disconnect()
+  }, [])
+
+  // -------------------------------------------------------------------------
+  // Frame hooks
+  // -------------------------------------------------------------------------
+  const addFrameHook = useCallback((fn: FrameHook) => {
+    hooksRef.current.push(fn)
+    return () => {
+      const idx = hooksRef.current.indexOf(fn)
+      if (idx >= 0) hooksRef.current.splice(idx, 1)
+    }
+  }, [])
+
+  // -------------------------------------------------------------------------
+  // Group management
+  // -------------------------------------------------------------------------
+  const addGroup = useCallback((name: string, groupConfig: GroupConfig) => {
+    if (groupsRef.current.has(name)) {
+      throw new Error(`Group "${name}" already exists`)
+    }
+    const needed = groupConfig.maxParticles
+    const freeList = freeListRef.current
+    const freeIdx = freeList.findIndex(s => s.end - s.start >= needed)
+    let start: number, end: number
+
+    if (freeIdx >= 0) {
+      const slot = freeList[freeIdx]
+      start = slot.start
+      end = start + needed
+      if (end < slot.end) {
+        freeList[freeIdx] = { start: end, end: slot.end }
+      } else {
+        freeList.splice(freeIdx, 1)
+      }
+    } else {
+      if (cursorRef.current + needed > maxParticles) {
+        throw new Error(`Group "${name}" exceeds maxParticles cap (${maxParticles})`)
+      }
+      start = cursorRef.current
+      end = start + needed
+      cursorRef.current = end
+    }
+
+    groupsRef.current.set(name, { name, start, end, activeCount: { value: 0 } })
+  }, [maxParticles])
+
+  const removeGroup = useCallback((name: string) => {
+    const group = groupsRef.current.get(name)
+    if (!group) return
+    const buf = bufRef.current
+    for (let i = group.start; i < group.end; i++) {
+      killParticle(buf, i, group.activeCount)
+    }
+    freeListRef.current.push({ start: group.start, end: group.end })
+    groupsRef.current.delete(name)
+  }, [])
+
+  const setGroupShape = useCallback((name: string, shape: string) => {
+    const group = groupsRef.current.get(name)
+    if (group) group.shape = shape
+  }, [])
+
+  // -------------------------------------------------------------------------
+  // Burst — spawn N particles into a named group
+  // -------------------------------------------------------------------------
+  const burst = useCallback((options: BurstOptions) => {
+    const group = groupsRef.current.get(options.group)
+    if (!group) return
+    const buf = bufRef.current
+    const canvas = canvasRef.current
+    const cx = options.x ?? (canvas ? canvas.offsetWidth / 2 : 0)
+    const cy = options.y ?? (canvas ? canvas.offsetHeight / 2 : 0)
+    const speed = options.speed ?? 1
+    for (let i = 0; i < options.count; i++) {
+      const angle = Math.random() * Math.PI * 2
+      spawnParticle(buf, group.start, group.end, group.activeCount, {
+        x: cx,
+        y: cy,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        r: options.r,
+        g: options.g,
+        b: options.b,
+        opacity: options.opacity,
+        size: options.size,
+        lifetime: options.lifetime,
+        groupId: group.start,
+      })
+    }
+  }, [])
+
+  return {
+    ready,
+    canvasRef,
+    buf: bufRef.current,
+    canvasSize,
+    addFrameHook,
+    groups: { addGroup, removeGroup, setGroupShape },
+    burst,
+  }
+}
