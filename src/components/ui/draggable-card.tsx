@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
-import { X, Minus } from "@phosphor-icons/react"
-
 import { cn } from "@/lib/utils"
 
 export interface DraggableCardProps {
@@ -18,41 +16,31 @@ export interface DraggableCardProps {
 }
 
 export function DraggableCard({
-                                title,
-                                children,
-                                defaultPosition = { x: 24, y: 24 },
-                                defaultWidth = 320,
-                                open = true,
-                                onClose,
-                                className,
-                              }: DraggableCardProps) {
+  title,
+  children,
+  defaultPosition = { x: 24, y: 24 },
+  defaultWidth = 320,
+  open = true,
+  onClose,
+  className,
+}: DraggableCardProps) {
   const [position, setPosition] = useState(defaultPosition)
   const [minimized, setMinimized] = useState(false)
   const cardRef = useRef<HTMLDivElement | null>(null)
   const dragOffset = useRef<{ x: number; y: number } | null>(null)
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    // Don't initiate drag if the click landed on a button (close, minimize)
     if ((e.target as HTMLElement).closest("button")) return
-
     const card = cardRef.current
     if (!card) return
     const rect = card.getBoundingClientRect()
-    dragOffset.current = {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    }
-    // Capture the pointer so we keep getting moves even if the cursor
-    // leaves the header (e.g. drags fast)
+    dragOffset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
     e.currentTarget.setPointerCapture(e.pointerId)
   }, [])
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragOffset.current) return
-    setPosition({
-      x: e.clientX - dragOffset.current.x,
-      y: e.clientY - dragOffset.current.y,
-    })
+    setPosition({ x: e.clientX - dragOffset.current.x, y: e.clientY - dragOffset.current.y })
   }, [])
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -62,8 +50,6 @@ export function DraggableCard({
     }
   }, [])
 
-  // Clamp position to viewport when window resizes so the card doesn't
-  // get stranded off-screen
   useEffect(() => {
     const clamp = () => {
       const card = cardRef.current
@@ -84,37 +70,33 @@ export function DraggableCard({
     <div
       ref={cardRef}
       className={cn(
-        "fixed  border border-border text-xs select-none z-40 shadow-lg",
+        "fixed border border-border bg-background text-xs select-none z-40",
         className
       )}
-      style={{
-        left: position.x,
-        top: position.y,
-        width: defaultWidth,
-      }}
+      style={{ left: position.x, top: position.y, width: defaultWidth }}
     >
       <div
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        className="flex items-center justify-between h-7 px-2 border-b border-border cursor-move bg-muted/30"
+        className="flex items-center justify-between h-7 px-2 border-b border-border cursor-move"
       >
-        <span className="font-heading text-xs tracking-tight">{title}</span>
-        <div className="flex items-center gap-0.5">
+        <span className="text-foreground tracking-wide">&gt; {title}</span>
+        <div className="flex items-center gap-1">
           <button
             onClick={() => setMinimized((m) => !m)}
-            className="size-5 flex items-center justify-center hover:bg-muted transition-colors"
+            className="px-1 text-muted-foreground hover:text-foreground transition-colors"
             aria-label={minimized ? "Expand" : "Minimize"}
           >
-            <Minus className="size-3" />
+            [-]
           </button>
           {onClose && (
             <button
               onClick={onClose}
-              className="size-5 flex items-center justify-center hover:bg-muted transition-colors"
+              className="px-1 text-muted-foreground hover:text-foreground transition-colors"
               aria-label="Close"
             >
-              <X className="size-3" />
+              [x]
             </button>
           )}
         </div>
